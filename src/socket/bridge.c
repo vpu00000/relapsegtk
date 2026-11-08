@@ -211,6 +211,10 @@ static void start_timer(UiBridge *bridge)
 static void start(UiBridge *bridge)
 {
     stop(bridge);
+    if (!bridge->enabled) {
+        set_state(bridge, OUTPUT_OFF, "Output off");
+        return;
+    }
     if (!bridge->session) {
         set_state(bridge, OUTPUT_WAITING, "Waiting for a game");
         return;
@@ -258,12 +262,8 @@ void ui_bridge_set_output_enabled(UiBridge *bridge, gboolean enabled)
     enabled = !!enabled;
     if (bridge->enabled == enabled) return;
     bridge->enabled = enabled;
-    if (bridge->channel && relapse_socket_get_state(bridge->channel) == RELAPSE_SOCKET_OPEN)
-        configure(bridge);
-    else if (bridge->state != OUTPUT_CONNECTING) {
-        bridge->session = socket_client_get_session(bridge->client);
-        start(bridge);
-    }
+    bridge->session = socket_client_get_session(bridge->client);
+    start(bridge);
 }
 
 void ui_bridge_sync(UiBridge *bridge)
@@ -284,8 +284,9 @@ gboolean ui_bridge_result(UiBridge *bridge, gint64 id, gboolean submitted, const
 
 gboolean ui_bridge_is_ready(UiBridge *bridge)
 {
-    return bridge && bridge->ready && socket_client_is_ready(bridge->client) &&
-        relapse_socket_get_state(bridge->channel) == RELAPSE_SOCKET_OPEN;
+    return bridge && socket_client_is_ready(bridge->client) &&
+        (!bridge->enabled || (bridge->ready &&
+         relapse_socket_get_state(bridge->channel) == RELAPSE_SOCKET_OPEN));
 }
 
 static void append_lua_string(GString *script, const char *text)
@@ -307,6 +308,8 @@ static void append_lua_string(GString *script, const char *text)
 SocketClientSendResult ui_bridge_execute(UiBridge *bridge, const char *name, const char *source)
 {
     if (!ui_bridge_is_ready(bridge)) return SOCKET_CLIENT_NOT_READY;
+    if (!bridge->enabled)
+        return socket_client_execute(bridge->client, name, source, NULL);
     g_autoptr(GString) script = g_string_new("getgenv().__relapsegtk_session_v2.execute(");
     append_lua_string(script, source);
     g_string_append_c(script, ',');

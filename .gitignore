@@ -2,3 +2,5 @@
 /build/
 /cmake-build-*/
 /compile_commands.json
+/packaging/publish.env
+/packaging/gnupg/

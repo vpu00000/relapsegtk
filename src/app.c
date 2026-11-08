@@ -2,11 +2,18 @@
 #include "socket/sessions.h"
 #include "ui/style.h"
 #include "ui/window.h"
+#include "ui/console.h"
 #include "settings/session.h"
 #include "settings/output.h"
 #include "socket/bridge.h"
 #include "profiles/store.h"
 #include "settings/launcher.h"
+#include <string.h>
+#ifdef RELAPSEGTK_UPDATE_ENABLED
+#include "update/update.h"
+#include <errno.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
     GtkWindow *window;
@@ -17,7 +24,152 @@ typedef struct {
     guint discovery;
     gboolean redirect_output;
     GHashTable *launches;
+    GHashTable *consoles;
 } App;
+
+typedef struct {
+    App *app;
+    char *path;
+    GtkWindow *window;
+} ConsoleView;
+
+static void free_console_view(gpointer user_data)
+{
+    ConsoleView *view = user_data;
+    gtk_window_destroy(view->window);
+    g_free(view->path);
+    g_free(view);
+}
+
+static void console_answer(gint64 id, const char *text, gpointer user_data)
+{
+    ConsoleView *view = user_data;
+    sessions_console_input(view->app->sessions, view->path, id, text);
+}
+
+static ConsoleView *console_view(App *app, const char *path)
+{
+    ConsoleView *view = g_hash_table_lookup(app->consoles, path);
+    if (view) return view;
+    view = g_new0(ConsoleView, 1);
+    view->app = app;
+    view->path = g_strdup(path);
+    view->window = console_window_new(app->window, console_answer, view);
+    g_hash_table_insert(app->consoles, view->path, view);
+    return view;
+}
+
+static void console_show(const char *path, gboolean visible, gpointer user_data)
+{
+    console_window_show(console_view(user_data, path)->window, visible);
+}
+
+static void console_title(const char *path, const char *title, gpointer user_data)
+{
+    console_window_set_title(console_view(user_data, path)->window, title);
+}
+
+static void console_clear(const char *path, gpointer user_data)
+{
+    console_window_clear(console_view(user_data, path)->window);
+}
+
+static void console_entry(const char *path, const char *level, const char *text, gpointer user_data)
+{
+    console_window_append(console_view(user_data, path)->window, level, text);
+}
+
+static void console_input(const char *path, gint64 id, gpointer user_data)
+{
+    console_window_request_input(console_view(user_data, path)->window, id);
+}
+
+#ifdef RELAPSEGTK_UPDATE_ENABLED
+typedef struct {
+    GWeakRef window;
+    UpdateInfo *info;
+} UpdateChoice;
+
+static void update_connection_status(App *app);
+
+static void free_update_choice(UpdateChoice *choice)
+{
+    g_weak_ref_clear(&choice->window);
+    update_info_free(choice->info);
+    g_free(choice);
+}
+
+static void update_install_finished(const char *error, gpointer user_data)
+{
+    UpdateChoice *choice = user_data;
+    g_autoptr(GtkWindow) window = g_weak_ref_get(&choice->window);
+    if (window) {
+        App *app = g_object_get_data(G_OBJECT(window), "app");
+        if (error) {
+            update_connection_status(app);
+            g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not install the update");
+            gtk_alert_dialog_set_detail(alert, error);
+            gtk_alert_dialog_show(alert, window);
+        } else {
+            const char *image = g_getenv("APPIMAGE");
+            char *const arguments[] = {(char *)image, NULL};
+            execv(image, arguments);
+            int failure = errno;
+            update_connection_status(app);
+            g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Update installed, but restart failed");
+            gtk_alert_dialog_set_detail(alert, g_strerror(failure));
+            gtk_alert_dialog_show(alert, window);
+        }
+    }
+    free_update_choice(choice);
+}
+
+static void update_choice_finished(GObject *dialog, GAsyncResult *result, gpointer user_data)
+{
+    UpdateChoice *choice = user_data;
+    int index = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(dialog), result, NULL);
+    g_autoptr(GtkWindow) window = g_weak_ref_get(&choice->window);
+    if (index == 1 && window) {
+        window_set_status(window, "Updating", "Downloading and verifying the update…", FALSE);
+        update_install_async(choice->info, update_install_finished, choice);
+        return;
+    }
+    free_update_choice(choice);
+}
+
+static void update_checked(const UpdateInfo *info, const char *error, gpointer user_data)
+{
+    (void)error;
+    GWeakRef *owner = user_data;
+    g_autoptr(GtkWindow) window = g_weak_ref_get(owner);
+    if (window && info) {
+        g_autofree char *title = g_strdup_printf("RelapseGTK %s is available", info->version);
+        g_autofree char *detail = g_strdup_printf(
+            "You are running %s.\nSource: %s\n\nRelapseGTK will verify the update and restart automatically.",
+            update_current_version(), update_repository());
+        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("%s", title);
+        gtk_alert_dialog_set_detail(alert, detail);
+        const char *buttons[] = {"Later", "Update", NULL};
+        gtk_alert_dialog_set_buttons(alert, buttons);
+        gtk_alert_dialog_set_cancel_button(alert, 0);
+        gtk_alert_dialog_set_default_button(alert, 0);
+        UpdateChoice *choice = g_new0(UpdateChoice, 1);
+        g_weak_ref_init(&choice->window, window);
+        choice->info = update_info_copy(info);
+        gtk_alert_dialog_choose(alert, window, NULL, update_choice_finished, choice);
+    }
+    g_weak_ref_clear(owner);
+    g_free(owner);
+}
+
+static void check_updates(App *app)
+{
+    if (!update_is_configured()) return;
+    GWeakRef *owner = g_new0(GWeakRef, 1);
+    g_weak_ref_init(owner, app->window);
+    update_check_async(update_checked, owner);
+}
+#endif
 
 static gboolean refresh_profiles(gpointer user_data);
 
@@ -92,9 +244,11 @@ static void socket_state_changed(const char *path, SocketClientState state, cons
     (void)detail;
     App *app = user_data;
     gboolean active = sessions_is_active(app->sessions, path);
-    if (state != SOCKET_CLIENT_READY)
+    if (state != SOCKET_CLIENT_READY) {
+        g_hash_table_remove(app->consoles, path);
         window_set_output_status(app->window, path,
             !active ? "Closed" : state == SOCKET_CLIENT_WAITING ? "Waiting for a game" : "Reconnecting…", active);
+    }
     if (g_strcmp0(path, app->socket_path) == 0) update_connection_status(app);
 }
 
@@ -254,6 +408,7 @@ static void free_app(gpointer user_data)
     g_free(app->launcher_path);
     g_free(app->socket_path);
     g_hash_table_unref(app->launches);
+    g_hash_table_unref(app->consoles);
     g_free(app);
 }
 
@@ -275,6 +430,7 @@ static void activate(GtkApplication *application, gpointer user_data)
 
     App *app = g_new0(App, 1);
     app->launches = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
+    app->consoles = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, free_console_view);
     app->scripts_path = g_build_filename(g_get_home_dir(), "relapse-scripts-tmpdir", NULL);
     WindowHandlers window_handlers = {
         .execute = execute_script, .open_script = open_script, .active_script_changed = update_execute,
@@ -315,7 +471,9 @@ static void activate(GtkApplication *application, gpointer user_data)
     }
     SessionHandlers session_handlers = {
         .state_changed = socket_state_changed, .output_changed = output_state_changed,
-        .entry = output_entry, .result = script_result
+        .entry = output_entry, .result = script_result,
+        .console_show = console_show, .console_title = console_title, .console_clear = console_clear,
+        .console_entry = console_entry, .console_input = console_input
     };
     app->sessions = sessions_new(&session_handlers, app);
     sessions_set_output_enabled(app->sessions, app->redirect_output);
@@ -323,6 +481,9 @@ static void activate(GtkApplication *application, gpointer user_data)
     refresh_profiles(app);
     app->discovery = g_timeout_add_seconds(1, refresh_profiles, app);
     gtk_window_present(app->window);
+#ifdef RELAPSEGTK_UPDATE_ENABLED
+    check_updates(app);
+#endif
 }
 
 int app_run(int argc, char **argv)

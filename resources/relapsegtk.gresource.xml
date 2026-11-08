@@ -3,6 +3,7 @@
   <gresource prefix="/org/relapse/RelapseGtk">
     <file>style.css</file>
     <file>scripts/session.luau</file>
+    <file>scripts/console.luau</file>
     <file>styles/relapse.xml</file>
     <file>icons/relapse.svg</file>
     <file>icons/chevron-left.svg</file>

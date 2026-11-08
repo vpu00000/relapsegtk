@@ -850,3 +850,19 @@ window.relapse-ui.fullscreen headerbar {
     border-color: #adc991;
     background: #adc991;
 }
+
+.relapse-ui entry.console-input {
+    min-height: 32px;
+    padding: 0 8px;
+    background-color: var(--relapse-editor);
+    border: 1px solid var(--relapse-border);
+    border-radius: 3px;
+}
+
+.relapse-ui entry.console-input:focus-within {
+    border-color: var(--relapse-focus);
+}
+
+.relapse-ui entry.console-input selection {
+    background-color: var(--relapse-selection);
+}

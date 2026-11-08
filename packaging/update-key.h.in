@@ -1,0 +1,6 @@
+#pragma once
+
+#define RELAPSEGTK_UPDATE_PUBLIC_KEY_SIZE @RELAPSEGTK_UPDATE_KEY_SIZE@
+static const unsigned char relapsegtk_update_public_key[] = {
+    @RELAPSEGTK_UPDATE_KEY_BYTES@
+};

@@ -2,20 +2,88 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="$SCRIPT_DIR/Build"
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+if [[ "${1:-}" == "--help" ]]; then
+    cat <<'EOF'
+Usage: packaging/create-signed-appimage.sh
+
+Build, sign, and verify an updater-enabled AppImage using packaging/publish.env.
+No GitHub release is created and nothing is uploaded.
+
+Required environment:
+  GNUPGHOME           GPG home containing the release key
+  GITHUB_REPOSITORY   Update repository in owner/repository form
+
+Optional environment:
+  SIGNING_KEY         Key User ID; defaults to relapsegtksigkey
+  RELEASE_TAG         Version tag; defaults to the exact tag on HEAD
+  LINUXDEPLOY         Existing linuxdeploy AppImage to use instead of downloading it
+
+Output:
+  Build/Release/RelapseGtk-x86_64.AppImage
+  Build/Release/RelapseGtk-x86_64.AppImage.sig
+EOF
+    exit 0
+fi
+if (( $# )); then
+    echo "Usage: packaging/create-signed-appimage.sh [--help]" >&2
+    exit 2
+fi
+ENV_FILE="${RELAPSEGTK_RELEASE_ENV:-$SCRIPT_DIR/publish.env}"
+if [[ ! -f "$ENV_FILE" ]]; then
+    echo "Create $SCRIPT_DIR/publish.env from publish.env.example first" >&2
+    exit 1
+fi
+set -a
+source "$ENV_FILE"
+set +a
+: "${GNUPGHOME:?Set GNUPGHOME in publish.env}"
+: "${GITHUB_REPOSITORY:?Set GITHUB_REPOSITORY in publish.env}"
+[[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+    echo "GITHUB_REPOSITORY must use owner/repository form" >&2
+    exit 1
+}
+SIGNING_KEY="${SIGNING_KEY:-relapsegtksigkey}"
+if [[ -z "${RELEASE_TAG:-}" ]]; then
+    RELEASE_TAG="$(git -C "$ROOT_DIR" describe --tags --exact-match HEAD)" || {
+        echo "Tag HEAD or set RELEASE_TAG for a local build" >&2
+        exit 1
+    }
+fi
+VERSION="${RELEASE_TAG#v}"
+[[ "$VERSION" =~ ^[A-Za-z0-9._-]+$ ]] || {
+    echo "RELEASE_TAG contains unsupported characters" >&2
+    exit 1
+}
+export GNUPGHOME
+PUBLIC_KEY="$GNUPGHOME/relapsegtk-release.gpg"
+BUILD_DIR="$ROOT_DIR/Build/Release"
 WORK_DIR="$BUILD_DIR/appimage"
 TOOLS_DIR="$WORK_DIR/tools"
+APPIMAGE="$BUILD_DIR/RelapseGtk-x86_64.AppImage"
 ARCH=x86_64
 
-for tool in curl python3 sha256sum pkg-config glib-compile-schemas; do
+for tool in cmake git gpg gpgv curl python3 sha256sum pkg-config glib-compile-schemas; do
     command -v "$tool" >/dev/null || { echo "Missing packaging tool: $tool" >&2; exit 1; }
 done
-
-"$SCRIPT_DIR/build.sh" "$@"
-mkdir -p "$TOOLS_DIR" "$WORK_DIR/tmp"
+mapfile -t keys < <(gpg --list-secret-keys --with-colons "$SIGNING_KEY" 2>/dev/null |
+    awk -F: '$1 == "fpr" { print $10 }')
+if (( ${#keys[@]} != 1 )); then
+    echo "Expected exactly one secret key matching $SIGNING_KEY; run the key-creation commands in packaging/README.md first" >&2
+    exit 1
+fi
+mkdir -p "$BUILD_DIR" "$TOOLS_DIR" "$WORK_DIR/tmp"
+gpg --export "$SIGNING_KEY" > "$PUBLIC_KEY.tmp"
+mv -- "$PUBLIC_KEY.tmp" "$PUBLIC_KEY"
+cmake -S "$ROOT_DIR" -B "$BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DRELAPSEGTK_ENABLE_UPDATER=ON \
+    "-DRELAPSEGTK_VERSION=$VERSION" \
+    "-DRELAPSEGTK_UPDATE_REPOSITORY=$GITHUB_REPOSITORY" \
+    "-DRELAPSEGTK_UPDATE_PUBLIC_KEY=$PUBLIC_KEY"
+cmake --build "$BUILD_DIR" --parallel "$(nproc)"
 export TMPDIR="$WORK_DIR/tmp"
 
-# Cache official release assets, checking GitHub's SHA-256 digests.
 download_asset() {
     local repository="$1" filename="$2"
     local target="$TOOLS_DIR/$filename"
@@ -55,7 +123,7 @@ APPDIR="$(mktemp -d "$WORK_DIR/AppDir.XXXXXX")"
 trap 'rm -rf -- "$APPDIR"' EXIT
 mkdir -p "$APPDIR/usr/lib/gio/modules" "$APPDIR/usr/share/glib-2.0/schemas" \
     "$APPDIR/usr/share/doc/relapsegtk"
-cp "$SCRIPT_DIR/LICENSE" "$APPDIR/usr/share/doc/relapsegtk/LICENSE"
+cp "$ROOT_DIR/LICENSE" "$APPDIR/usr/share/doc/relapsegtk/LICENSE"
 
 gtk_prefix="$(pkg-config --variable=prefix gtk4)"
 gio_libdir="$(pkg-config --variable=libdir gio-2.0)"
@@ -68,7 +136,6 @@ svg_loader="$pixbuf_modules/libpixbufloader_svg.so"
     exit 1
 }
 
-# GTK 4 has no linuxdeploy GTK plugin; stage its runtime data explicitly.
 shopt -s nullglob
 schemas=("$schema_dir"/org.gtk.gtk4.*.gschema.xml)
 [[ ${#schemas[@]} -gt 0 ]] || { echo "GTK 4 schemas not found in $schema_dir" >&2; exit 1; }
@@ -80,16 +147,12 @@ for directory in gtk-4.0 gtksourceview-5 icons/Adwaita; do
         cp -a "$gtk_prefix/share/$directory" "$APPDIR/usr/share/$directory"
     fi
 done
-# Hicolor also contains icons from unrelated installed applications. Only its
-# theme definition is needed; linuxdeploy adds RelapseGtk's own icon below.
 mkdir -p "$APPDIR/usr/share/icons/hicolor"
 cp "$gtk_prefix/share/icons/hicolor/index.theme" "$APPDIR/usr/share/icons/hicolor/"
 if [[ -f "$gio_libdir/gio/modules/libdconfsettings.so" ]]; then
     cp -L "$gio_libdir/gio/modules/libdconfsettings.so" "$APPDIR/usr/lib/gio/modules/"
 fi
 
-# Bundle the dependency closure, including libraries on linuxdeploy's default
-# exclusion list. Only the C runtime and host graphics-driver stack stay external.
 libraries=(--library "$svg_loader")
 ldd "$BUILD_DIR/relapsegtk" "$svg_loader" "$pixbuf_query" \
     "$APPDIR/usr/lib/gio/modules/"*.so > "$WORK_DIR/dependencies.txt"
@@ -111,10 +174,16 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 "$LINUXDEPLOY" --appdir "$APPDIR" \
     --executable "$BUILD_DIR/relapsegtk" --executable "$pixbuf_query" \
     "${libraries[@]}" --deploy-deps-only "$APPDIR/usr/lib/gio/modules" \
-    --desktop-file "$SCRIPT_DIR/packaging/appimage/org.relapse.RelapseGtk.desktop" \
-    --icon-file "$SCRIPT_DIR/resources/icons/relapse.svg" --icon-filename org.relapse.RelapseGtk \
-    --custom-apprun "$SCRIPT_DIR/packaging/appimage/AppRun"
+    --desktop-file "$ROOT_DIR/packaging/appimage/org.relapse.RelapseGtk.desktop" \
+    --icon-file "$ROOT_DIR/resources/icons/relapse.svg" --icon-filename org.relapse.RelapseGtk \
+    --custom-apprun "$ROOT_DIR/packaging/appimage/AppRun"
+ln -s "usr/share/icons/hicolor/scalable/apps/org.relapse.RelapseGtk.svg" "$APPDIR/.DirIcon"
+chmod -R a+rX "$APPDIR"
 
-export LDAI_OUTPUT="$BUILD_DIR/RelapseGtk-$ARCH.AppImage" ARCH
+export LDAI_OUTPUT="$APPIMAGE" ARCH
 "$LINUXDEPLOY" --appdir "$APPDIR" --output appimage
-printf '\n==> AppImage: %s\n' "$LDAI_OUTPUT"
+gpg --batch --yes --local-user "$SIGNING_KEY" \
+    --output "$APPIMAGE.sig" --detach-sign "$APPIMAGE"
+gpgv --keyring "$PUBLIC_KEY" "$APPIMAGE.sig" "$APPIMAGE"
+printf '\nVersion: %s\nRepository: %s\nAppImage: %s\nSignature: %s.sig\nNothing was published.\n' \
+    "$VERSION" "$GITHUB_REPOSITORY" "$APPIMAGE" "$APPIMAGE"

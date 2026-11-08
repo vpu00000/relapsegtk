@@ -17,6 +17,7 @@ typedef struct {
     char *path;
     SocketClient *client;
     UiBridge *bridge;
+    ConsoleBridge *console;
     SocketClientState state;
     OutputState output_state;
     GPid pid;
@@ -60,6 +61,41 @@ static void entry(const char *level, const char *text, gpointer user_data)
         owner->handlers.entry(session->path, level, text, owner->user_data);
 }
 
+static void console_show(gboolean visible, gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.console_show)
+        session->owner->handlers.console_show(session->path, visible, session->owner->user_data);
+}
+
+static void console_title(const char *title, gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.console_title)
+        session->owner->handlers.console_title(session->path, title, session->owner->user_data);
+}
+
+static void console_clear(gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.console_clear)
+        session->owner->handlers.console_clear(session->path, session->owner->user_data);
+}
+
+static void console_entry(const char *level, const char *text, gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.console_entry)
+        session->owner->handlers.console_entry(session->path, level, text, session->owner->user_data);
+}
+
+static void console_input(gint64 id, gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.console_input)
+        session->owner->handlers.console_input(session->path, id, session->owner->user_data);
+}
+
 static void state_changed(SocketClientState state, const char *detail, gpointer user_data)
 {
     Session *session = user_data;
@@ -67,6 +103,7 @@ static void state_changed(SocketClientState state, const char *detail, gpointer 
     session->state = state;
     remember_process(session);
     ui_bridge_sync(session->bridge);
+    console_bridge_sync(session->console);
     if (owner->handlers.state_changed)
         owner->handlers.state_changed(session->path, state, detail, owner->user_data);
 }
@@ -76,6 +113,7 @@ static void result(gint64 id, gboolean submitted, const char *detail, gpointer u
     Session *session = user_data;
     Sessions *owner = session->owner;
     if (ui_bridge_result(session->bridge, id, submitted, detail)) return;
+    if (console_bridge_result(session->console, id, submitted, detail)) return;
     if (owner->handlers.result)
         owner->handlers.result(session->path, id, submitted, detail, owner->user_data);
 }
@@ -88,6 +126,7 @@ static void error(const char *detail, gpointer user_data)
 static void free_session(gpointer user_data)
 {
     Session *session = user_data;
+    console_bridge_free(session->console);
     ui_bridge_free(session->bridge);
     socket_client_free(session->client);
     if (session->pid_fd >= 0) close(session->pid_fd);
@@ -132,6 +171,11 @@ void sessions_update(Sessions *sessions, const char *const *paths)
         session->client = socket_client_new(session->path, &client_handlers, session);
         UiBridgeHandlers output_handlers = {.state_changed = output_changed, .entry = entry};
         session->bridge = ui_bridge_new(session->client, &output_handlers, session);
+        ConsoleBridgeHandlers console_handlers = {
+            .show = console_show, .title = console_title, .clear = console_clear,
+            .entry = console_entry, .input = console_input, .error = error
+        };
+        session->console = console_bridge_new(session->client, &console_handlers, session);
         g_hash_table_insert(sessions->clients, session->path, session);
         ui_bridge_set_output_enabled(session->bridge, sessions->output_enabled);
         socket_client_start(session->client);
@@ -187,6 +231,12 @@ SocketClientSendResult sessions_execute(Sessions *sessions, const char *path, co
 {
     Session *session = lookup(sessions, path);
     return session ? ui_bridge_execute(session->bridge, name, source) : SOCKET_CLIENT_NOT_READY;
+}
+
+void sessions_console_input(Sessions *sessions, const char *path, gint64 id, const char *text)
+{
+    Session *session = lookup(sessions, path);
+    if (session) console_bridge_input(session->console, id, text);
 }
 
 void sessions_free(Sessions *sessions)

@@ -8,6 +8,7 @@
 #include "socket/bridge.h"
 #include "profiles/store.h"
 #include "settings/launcher.h"
+#include "settings/scripts.h"
 #include <string.h>
 #ifdef RELAPSEGTK_UPDATE_ENABLED
 #include "update/update.h"
@@ -297,6 +298,16 @@ static gboolean save_launcher(const char *path, GError **error, gpointer user_da
     return TRUE;
 }
 
+static gboolean save_scripts_path(const char *path, GError **error, gpointer user_data)
+{
+    App *app = user_data;
+    if (!scripts_settings_save(path, error)) return FALSE;
+    g_free(app->scripts_path);
+    app->scripts_path = g_strdup(path);
+    window_set_scripts_path(app->window, path);
+    return TRUE;
+}
+
 static gboolean profile_running(const char *name, gpointer user_data)
 {
     App *app = user_data;
@@ -431,16 +442,21 @@ static void activate(GtkApplication *application, gpointer user_data)
     App *app = g_new0(App, 1);
     app->launches = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
     app->consoles = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, free_console_view);
-    app->scripts_path = g_build_filename(g_get_home_dir(), "relapse-scripts-tmpdir", NULL);
+    g_autoptr(GError) settings_error = NULL;
+    app->scripts_path = scripts_settings_load(&settings_error);
+    if (!app->scripts_path) {
+        g_printerr("Could not load script folder preference: %s\n", settings_error->message);
+        app->scripts_path = scripts_directory_default();
+    }
     WindowHandlers window_handlers = {
         .execute = execute_script, .open_script = open_script, .active_script_changed = update_execute,
         .editor_settings_changed = save_editor_settings, .restore_tabs_changed = save_restore_tabs,
-        .output_changed = save_output, .launcher_changed = save_launcher,
+        .output_changed = save_output, .launcher_changed = save_launcher, .scripts_changed = save_scripts_path,
         .socket_selected = select_socket, .launch_profile = launch_profile, .profile_running = profile_running
     };
     app->window = window_new(application, app->scripts_path, &window_handlers, app);
     EditorSettings settings;
-    g_autoptr(GError) settings_error = NULL;
+    g_clear_error(&settings_error);
     if (!editor_settings_load(&settings, &settings_error))
         g_printerr("Could not load settings: %s\n", settings_error->message);
     window_set_editor_settings(app->window, &settings);

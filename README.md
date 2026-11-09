@@ -26,7 +26,7 @@ release key, build a signed AppImage, and publish an update.
   `~/.config/relapsegtk/settings.ini`)
 - Tab session: `$XDG_STATE_HOME/relapsegtk/session.json` (by default
   `~/.local/state/relapsegtk/session.json`)
-- Script folder: `~/relapse-scripts-tmpdir`
+- Script folder: `~/relapse-scripts-tmpdir` by default; configurable under Settings → Scripts
 
 ## License
 

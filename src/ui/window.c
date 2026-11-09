@@ -13,6 +13,7 @@ typedef struct {
     GtkWidget *toolbar;
     GtkWidget *output;
     GtkWidget *profiles;
+    GtkWidget *scripts;
     GtkWidget *socket_picker;
     gboolean output_enabled;
     GtkStack *views;
@@ -35,6 +36,15 @@ static Window *window_data(GtkWindow *window)
 void window_set_launcher(GtkWindow *window, const char *path)
 {
     settings_set_launcher(window_data(window)->settings_page, path);
+}
+
+void window_set_scripts_path(GtkWindow *window, const char *path)
+{
+    Window *state = window_data(window);
+    settings_set_scripts_path(state->settings_page, path);
+    scripts_set_directory(state->scripts, path);
+    toolbar_set_scripts_path(state->toolbar, path);
+    tabs_set_scripts_path(state->tabs, path);
 }
 
 void window_show_settings(GtkWindow *window)
@@ -61,6 +71,13 @@ static gboolean launcher_changed(const char *path, GError **error, gpointer user
     Window *state = window_data(user_data);
     return !state->stopped && (!state->handlers.launcher_changed ||
         state->handlers.launcher_changed(path, error, state->user_data));
+}
+
+static gboolean scripts_changed(const char *path, GError **error, gpointer user_data)
+{
+    Window *state = window_data(user_data);
+    return !state->stopped && (!state->handlers.scripts_changed ||
+        state->handlers.scripts_changed(path, error, state->user_data));
 }
 
 static void socket_selected(const char *path, gpointer user_data)
@@ -515,9 +532,9 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
     GtkWidget *sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     state->profiles = profile_picker_new(launch_profile, profile_running, window);
-    GtkWidget *scripts = scripts_new(scripts_path, script_selected, script_renamed, state);
-    gtk_widget_set_vexpand(scripts, TRUE);
-    gtk_box_append(GTK_BOX(sidebar), scripts);
+    state->scripts = scripts_new(scripts_path, script_selected, script_renamed, state);
+    gtk_widget_set_vexpand(state->scripts, TRUE);
+    gtk_box_append(GTK_BOX(sidebar), state->scripts);
     gtk_box_append(GTK_BOX(sidebar), state->profiles);
     gtk_paned_set_start_child(GTK_PANED(paned), sidebar);
     gtk_paned_set_end_child(GTK_PANED(paned), box);
@@ -532,9 +549,10 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     gtk_stack_add_titled(state->views, paned, "editor", "Editor");
     EditorSettings defaults = editor_settings_defaults();
     state->settings_page = settings_new(&defaults, editor_settings_changed, restore_tabs_changed,
-                                        output_changed, launcher_changed, window);
+                                        output_changed, launcher_changed, scripts_changed, window);
     gtk_stack_add_titled(state->views, state->settings_page, "settings", "Settings");
     window_set_editor_settings(window, &defaults);
+    settings_set_scripts_path(state->settings_page, scripts_path);
 
     GtkWidget *shell = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_box_append(GTK_BOX(shell), create_navigation(state));

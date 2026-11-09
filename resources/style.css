@@ -574,7 +574,7 @@ window.relapse-ui.fullscreen headerbar {
     background-color: var(--relapse-background);
 }
 
-.relapse-ui label.scripts-title {
+.relapse-ui .scripts-title {
     font-weight: 600;
     padding: 0 6px;
 }
@@ -596,8 +596,17 @@ window.relapse-ui.fullscreen headerbar {
     border: 0;
 }
 
+.relapse-ui list.scripts-list row.script-row image {
+    opacity: 0.72;
+}
+
 .relapse-ui list.scripts-list row.script-row:selected {
     background-color: var(--relapse-selection);
+    box-shadow: inset 2px 0 var(--relapse-focus);
+}
+
+.relapse-ui list.scripts-list row.script-row:selected image {
+    opacity: 1;
 }
 
 .relapse-ui list.scripts-list row.script-row:focus-visible {

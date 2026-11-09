@@ -31,6 +31,7 @@ typedef struct {
     GtkWidget *editor;
     GtkWidget *search;
     GtkWidget *tab;
+    GtkImage *icon;
     GtkLabel *label;
     GtkLabel *message;
     GFile *file;
@@ -148,9 +149,21 @@ void tabs_close_current(GtkWidget *tabs)
     }
 }
 
+static void update_origin_icon(Script *script)
+{
+    GFile *file = script->file ? script->file : script->save_file;
+    g_autofree char *directory = g_build_filename(g_get_home_dir(), ".config", "relapse", "autoexec", NULL);
+    g_autoptr(GFile) autoexec = g_file_new_for_path(directory);
+    gboolean is_autoexec = file && g_file_has_prefix(file, autoexec);
+    if (is_autoexec)
+        gtk_image_set_from_resource(script->icon, "/org/relapse/RelapseGtk/icons/autoexec.svg");
+    gtk_widget_set_visible(GTK_WIDGET(script->icon), is_autoexec);
+}
+
 static void update_label(GtkTextBuffer *buffer, GtkWidget *page)
 {
     Script *script = g_object_get_data(G_OBJECT(page), "script");
+    update_origin_icon(script);
     g_autofree char *label = g_strdup_printf("%s%s", script->name,
         script->load ? " …" : gtk_text_buffer_get_modified(buffer) ? " •" : "");
     gtk_label_set_text(script->label, label);
@@ -599,7 +612,13 @@ static Script *new_script(GtkNotebook *notebook, GFile *file, const char *name, 
     gtk_label_set_ellipsize(script->label, PANGO_ELLIPSIZE_END);
     gtk_label_set_width_chars(script->label, 12);
     gtk_label_set_max_width_chars(script->label, 22);
-    gtk_button_set_child(GTK_BUTTON(select), GTK_WIDGET(script->label));
+    script->icon = GTK_IMAGE(gtk_image_new());
+    gtk_image_set_pixel_size(script->icon, 16);
+    GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_append(GTK_BOX(content), GTK_WIDGET(script->icon));
+    gtk_box_append(GTK_BOX(content), GTK_WIDGET(script->label));
+    gtk_button_set_child(GTK_BUTTON(select), content);
+    update_origin_icon(script);
     GtkWidget *close = gtk_button_new_with_label("×");
     gtk_widget_add_css_class(close, "tab-close");
     gtk_widget_set_tooltip_text(close, "Close tab");
@@ -896,6 +915,13 @@ void tabs_set_editor_settings(GtkWidget *tabs, const EditorSettings *settings)
         Script *script = g_object_get_data(G_OBJECT(gtk_notebook_get_nth_page(book, i)), "script");
         editor_apply_settings(script->editor, settings);
     }
+}
+
+void tabs_set_scripts_path(GtkWidget *tabs, const char *path)
+{
+    Tabs *state = g_object_get_data(G_OBJECT(tabs), "tabs");
+    g_autoptr(GFile) folder = g_file_new_for_path(path);
+    g_set_object(&state->scripts_dir, folder);
 }
 
 void tabs_shutdown(GtkWidget *tabs)

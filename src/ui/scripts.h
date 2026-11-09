@@ -7,3 +7,4 @@ typedef GFile *(*ScriptRenameFunc)(GFile *file, const char *name, GError **error
 
 GtkWidget *scripts_new(const char *path, ScriptOpenFunc open_script,
                        ScriptRenameFunc rename_script, gpointer user_data);
+void scripts_set_directory(GtkWidget *scripts, const char *path);

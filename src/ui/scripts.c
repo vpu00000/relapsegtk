@@ -8,6 +8,7 @@ typedef struct {
     ScriptOpenFunc open_script;
     ScriptRenameFunc rename_script;
     gpointer user_data;
+    gboolean autoexec;
 } ScriptHandlers;
 
 typedef struct {
@@ -15,6 +16,7 @@ typedef struct {
     GFile *file;
     char *edit_name;
     GtkStack *stack;
+    GtkImage *icon;
     GtkLabel *label;
     GtkEntry *entry;
     GtkLabel *error;
@@ -236,7 +238,13 @@ static void script_row_init(ScriptRow *row)
     gtk_stack_add_named(row->stack, GTK_WIDGET(row->entry), "rename");
     gtk_stack_set_hhomogeneous(row->stack, FALSE);
     gtk_stack_set_vhomogeneous(row->stack, FALSE);
-    gtk_box_append(GTK_BOX(box), GTK_WIDGET(row->stack));
+    GtkWidget *title = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    row->icon = GTK_IMAGE(gtk_image_new());
+    gtk_image_set_pixel_size(row->icon, 14);
+    gtk_box_append(GTK_BOX(title), GTK_WIDGET(row->icon));
+    gtk_widget_set_hexpand(GTK_WIDGET(row->stack), TRUE);
+    gtk_box_append(GTK_BOX(title), GTK_WIDGET(row->stack));
+    gtk_box_append(GTK_BOX(box), title);
     row->error = GTK_LABEL(gtk_label_new(NULL));
     gtk_widget_add_css_class(GTK_WIDGET(row->error), "script-rename-error");
     gtk_label_set_xalign(row->error, 0);
@@ -340,6 +348,9 @@ static GtkWidget *create_row(gpointer item, gpointer user_data)
     GFileInfo *info = item;
     ScriptRow *row = g_object_new(script_row_get_type(), NULL);
     row->handlers = *(ScriptHandlers *)user_data;
+    gtk_image_set_from_resource(row->icon, row->handlers.autoexec
+        ? "/org/relapse/RelapseGtk/icons/autoexec.svg"
+        : "/org/relapse/RelapseGtk/icons/editor.svg");
     row->edit_name = g_strdup(g_file_info_get_edit_name(info));
     gtk_label_set_text(row->label, g_file_info_get_display_name(info));
     GFile *file = G_FILE(g_file_info_get_attribute_object(info, "standard::file"));
@@ -371,6 +382,62 @@ static void update_placeholder(GtkDirectoryList *directory, GParamSpec *property
     }
 }
 
+typedef struct {
+    GtkDirectoryList *directory;
+    GtkWidget *title;
+    GtkWidget *source_icon;
+    GtkLabel *placeholder;
+    ScriptHandlers *handlers;
+    char *scripts_path;
+    char *autoexec_path;
+    gboolean autoexec;
+} Scripts;
+
+static void free_scripts(gpointer user_data)
+{
+    Scripts *state = user_data;
+    g_free(state->scripts_path);
+    g_free(state->autoexec_path);
+    g_free(state);
+}
+
+static void update_directory(Scripts *state)
+{
+    const char *path = state->autoexec ? state->autoexec_path : state->scripts_path;
+    state->handlers->autoexec = state->autoexec;
+    gtk_image_set_from_resource(GTK_IMAGE(state->source_icon), state->autoexec
+        ? "/org/relapse/RelapseGtk/icons/autoexec.svg"
+        : "/org/relapse/RelapseGtk/icons/editor.svg");
+    g_autofree char *display_path = g_filename_display_name(path);
+    gtk_widget_set_tooltip_text(state->title, display_path);
+    if (g_mkdir_with_parents(path, 0700) != 0) {
+        gtk_directory_list_set_file(state->directory, NULL);
+        g_autofree char *message = g_strdup_printf("Could not create scripts folder:\n%s", g_strerror(errno));
+        gtk_label_set_text(state->placeholder, message);
+        return;
+    }
+    g_autoptr(GFile) folder = g_file_new_for_path(path);
+    gtk_directory_list_set_file(state->directory, folder);
+    update_placeholder(state->directory, NULL, state->placeholder);
+}
+
+void scripts_set_directory(GtkWidget *scripts, const char *path)
+{
+    Scripts *state = g_object_get_data(G_OBJECT(scripts), "scripts-state");
+    g_free(state->scripts_path);
+    state->scripts_path = g_strdup(path);
+    update_directory(state);
+}
+
+static void source_changed(GtkDropDown *source, GParamSpec *property, gpointer user_data)
+{
+    (void)property;
+    GtkWidget *sidebar = user_data;
+    Scripts *state = g_object_get_data(G_OBJECT(sidebar), "scripts-state");
+    state->autoexec = gtk_drop_down_get_selected(source) == 1;
+    update_directory(state);
+}
+
 GtkWidget *scripts_new(const char *path, ScriptOpenFunc open_script,
                        ScriptRenameFunc rename_script, gpointer user_data)
 {
@@ -379,12 +446,19 @@ GtkWidget *scripts_new(const char *path, ScriptOpenFunc open_script,
     gtk_widget_add_css_class(sidebar, "scripts-sidebar");
     gtk_widget_set_size_request(sidebar, 160, -1);
 
-    GtkWidget *title = gtk_label_new("Scripts");
+    g_autoptr(GtkStringList) sources = gtk_string_list_new(NULL);
+    gtk_string_list_append(sources, "Scripts");
+    gtk_string_list_append(sources, "Autoexec");
+    GtkWidget *title = gtk_drop_down_new(G_LIST_MODEL(sources), NULL);
     gtk_widget_add_css_class(title, "scripts-title");
-    gtk_label_set_xalign(GTK_LABEL(title), 0);
-    gtk_box_append(GTK_BOX(sidebar), title);
-    g_autofree char *display_path = g_filename_display_name(path);
-    gtk_widget_set_tooltip_text(title, display_path);
+    gtk_widget_add_css_class(title, "socket-picker");
+    gtk_drop_down_set_enable_search(GTK_DROP_DOWN(title), FALSE);
+    GtkWidget *source_icon = gtk_image_new_from_resource("/org/relapse/RelapseGtk/icons/editor.svg");
+    gtk_image_set_pixel_size(GTK_IMAGE(source_icon), 16);
+    GtkWidget *heading = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_append(GTK_BOX(heading), source_icon);
+    gtk_box_append(GTK_BOX(heading), title);
+    gtk_box_append(GTK_BOX(sidebar), heading);
 
     GtkWidget *list = gtk_list_box_new();
     gtk_widget_add_css_class(list, "scripts-list");
@@ -421,13 +495,16 @@ GtkWidget *scripts_new(const char *path, ScriptOpenFunc open_script,
     gtk_list_box_bind_model(GTK_LIST_BOX(list), G_LIST_MODEL(sorted), create_row, handler, NULL);
     g_object_unref(sorted);
 
-    if (g_mkdir_with_parents(path, 0700) != 0) {
-        g_autofree char *message = g_strdup_printf("Could not create scripts folder:\n%s", g_strerror(errno));
-        gtk_label_set_text(GTK_LABEL(placeholder), message);
-    } else {
-        g_autoptr(GFile) folder = g_file_new_for_path(path);
-        gtk_directory_list_set_file(directory, folder);
-        update_placeholder(directory, NULL, GTK_LABEL(placeholder));
-    }
+    Scripts *state = g_new0(Scripts, 1);
+    state->directory = directory;
+    state->title = title;
+    state->source_icon = source_icon;
+    state->placeholder = GTK_LABEL(placeholder);
+    state->handlers = handler;
+    state->scripts_path = g_strdup(path);
+    state->autoexec_path = g_build_filename(g_get_home_dir(), ".config", "relapse", "autoexec", NULL);
+    g_object_set_data_full(G_OBJECT(sidebar), "scripts-state", state, free_scripts);
+    update_directory(state);
+    g_signal_connect(title, "notify::selected", G_CALLBACK(source_changed), sidebar);
     return sidebar;
 }

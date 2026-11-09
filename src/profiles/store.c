@@ -198,6 +198,9 @@ GSubprocess *profile_launch(const char *launcher, const char *name, GError **err
         return NULL;
     }
     g_autoptr(GSubprocessLauncher) spawn = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_NONE);
+    g_subprocess_launcher_unsetenv(spawn, "LD_PRELOAD");
+    g_subprocess_launcher_unsetenv(spawn, "LD_AUDIT");
+    g_subprocess_launcher_unsetenv(spawn, "LD_LIBRARY_PATH");
     g_subprocess_launcher_set_child_setup(spawn, detach_launcher, NULL, NULL);
     return g_subprocess_launcher_spawn(spawn, error, launcher, "--profile", name, "--no-launch-ui", NULL);
 }

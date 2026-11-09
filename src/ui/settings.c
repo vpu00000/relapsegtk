@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "picker.h"
 
 #include <glib/gstdio.h>
 #include <unistd.h>
@@ -15,8 +16,12 @@ typedef struct {
     OutputChangedFunc output_changed;
     GtkWidget *launcher_button;
     GtkLabel *launcher_path;
-    GCancellable *picker;
     LauncherChangedFunc launcher_changed;
+    GtkWidget *scripts_button;
+    GtkLabel *scripts_path_label;
+    ScriptsChangedFunc scripts_changed;
+    char *scripts_path;
+    GCancellable *picker;
     gboolean stopped;
     gpointer user_data;
 } Settings;
@@ -31,33 +36,84 @@ void settings_set_launcher(GtkWidget *page, const char *path)
     gtk_widget_set_tooltip_text(GTK_WIDGET(state->launcher_path), path);
 }
 
-static void launcher_chosen(GObject *dialog, GAsyncResult *result, gpointer user_data)
+void settings_set_scripts_path(GtkWidget *page, const char *path)
+{
+    Settings *state = g_object_get_data(G_OBJECT(page), "settings");
+    g_free(state->scripts_path);
+    state->scripts_path = g_strdup(path);
+    g_autofree char *name = path && *path ? g_filename_display_basename(path) : g_strdup("None selected");
+    gtk_label_set_text(state->scripts_path_label, name);
+    gtk_widget_set_tooltip_text(GTK_WIDGET(state->scripts_path_label), path);
+}
+
+static void picker_error(GtkWidget *page, const char *title, const GError *error)
+{
+    if (!error || g_error_matches(error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_DISMISSED) ||
+        g_error_matches(error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_CANCELLED) ||
+        g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+        return;
+    g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("%s", title);
+    gtk_alert_dialog_set_detail(alert, error->message);
+    gtk_alert_dialog_show(alert, GTK_WINDOW(gtk_widget_get_root(page)));
+}
+
+static void picker_finished(Settings *state)
+{
+    g_clear_object(&state->picker);
+    gtk_widget_set_sensitive(state->launcher_button, TRUE);
+    gtk_widget_set_sensitive(state->scripts_button, TRUE);
+}
+
+static void launcher_chosen(GFile *file, const GError *error, gpointer user_data)
 {
     GWeakRef *owner = user_data;
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GFile) file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(dialog), result, &error);
     g_autoptr(GtkWidget) page = g_weak_ref_get(owner);
     Settings *state = page ? g_object_get_data(G_OBJECT(page), "settings") : NULL;
     if (state && !state->stopped) {
-        g_clear_object(&state->picker);
-        gtk_widget_set_sensitive(state->launcher_button, TRUE);
+        picker_finished(state);
+        g_autoptr(GError) failure = error ? g_error_copy(error) : NULL;
         if (file) {
             g_autofree char *path = g_file_get_path(file);
             if (!path || !g_file_test(path, G_FILE_TEST_IS_REGULAR) || g_access(path, X_OK) != 0)
-                g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Choose a local executable file.");
-            else if (!state->launcher_changed || state->launcher_changed(path, &error, state->user_data))
+                g_set_error_literal(&failure, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Choose a local executable file.");
+            else if (!state->launcher_changed || state->launcher_changed(path, &failure, state->user_data))
                 settings_set_launcher(page, path);
         }
-        if (error && !g_error_matches(error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_DISMISSED) &&
-            !g_error_matches(error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_CANCELLED) &&
-            !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
-            g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not select launcher");
-            gtk_alert_dialog_set_detail(alert, error->message);
-            gtk_alert_dialog_show(alert, GTK_WINDOW(gtk_widget_get_root(page)));
-        }
+        picker_error(page, "Could not select launcher", failure);
     }
     g_weak_ref_clear(owner);
     g_free(owner);
+}
+
+static void scripts_chosen(GFile *file, const GError *error, gpointer user_data)
+{
+    GWeakRef *owner = user_data;
+    g_autoptr(GtkWidget) page = g_weak_ref_get(owner);
+    Settings *state = page ? g_object_get_data(G_OBJECT(page), "settings") : NULL;
+    if (state && !state->stopped) {
+        picker_finished(state);
+        g_autoptr(GError) failure = error ? g_error_copy(error) : NULL;
+        if (file) {
+            g_autofree char *path = g_file_get_path(file);
+            if (!path || !g_file_test(path, G_FILE_TEST_IS_DIR))
+                g_set_error_literal(&failure, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Choose a local folder.");
+            else if (!state->scripts_changed || state->scripts_changed(path, &failure, state->user_data))
+                settings_set_scripts_path(page, path);
+        }
+        picker_error(page, "Could not select script folder", failure);
+    }
+    g_weak_ref_clear(owner);
+    g_free(owner);
+}
+
+static GWeakRef *picker_owner(GtkWidget *page, GtkWidget *button)
+{
+    Settings *state = g_object_get_data(G_OBJECT(page), "settings");
+    state->picker = g_cancellable_new();
+    gtk_widget_set_sensitive(button, FALSE);
+    GWeakRef *owner = g_new0(GWeakRef, 1);
+    g_weak_ref_init(owner, page);
+    return owner;
 }
 
 static void select_launcher(GtkButton *button, gpointer user_data)
@@ -65,15 +121,21 @@ static void select_launcher(GtkButton *button, gpointer user_data)
     GtkWidget *page = user_data;
     Settings *state = g_object_get_data(G_OBJECT(page), "settings");
     if (state->stopped || state->picker) return;
-    g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, "Select launcher");
-    gtk_file_dialog_set_accept_label(dialog, "Select");
-    gtk_file_dialog_set_modal(dialog, TRUE);
-    state->picker = g_cancellable_new();
-    gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
-    GWeakRef *owner = g_new0(GWeakRef, 1);
-    g_weak_ref_init(owner, page);
-    gtk_file_dialog_open(dialog, GTK_WINDOW(gtk_widget_get_root(page)), state->picker, launcher_chosen, owner);
+    GWeakRef *owner = picker_owner(page, GTK_WIDGET(button));
+    picker_open_file(GTK_WINDOW(gtk_widget_get_root(page)), "Select launcher", "Select",
+        NULL, state->picker, launcher_chosen, owner);
+}
+
+static void select_scripts(GtkButton *button, gpointer user_data)
+{
+    GtkWidget *page = user_data;
+    Settings *state = g_object_get_data(G_OBJECT(page), "settings");
+    if (state->stopped || state->picker) return;
+    GWeakRef *owner = picker_owner(page, GTK_WIDGET(button));
+    g_autoptr(GFile) initial = state->scripts_path && g_file_test(state->scripts_path, G_FILE_TEST_IS_DIR)
+        ? g_file_new_for_path(state->scripts_path) : g_file_new_for_path(g_get_home_dir());
+    picker_select_folder(GTK_WINDOW(gtk_widget_get_root(page)), "Select script folder", "Select",
+        initial, state->picker, scripts_chosen, owner);
 }
 
 void settings_shutdown(GtkWidget *page)
@@ -88,6 +150,7 @@ static void free_settings(gpointer user_data)
     Settings *state = user_data;
     if (state->picker) g_cancellable_cancel(state->picker);
     g_clear_object(&state->picker);
+    g_free(state->scripts_path);
     g_free(state);
 }
 
@@ -206,13 +269,15 @@ static GtkWidget *section_new(GtkWidget *column, const char *title, GtkWidget **
 
 GtkWidget *settings_new(const EditorSettings *settings, SettingsChangedFunc changed,
                        RestoreTabsChangedFunc restore_callback, OutputChangedFunc output_callback,
-                       LauncherChangedFunc launcher_callback, gpointer user_data)
+                       LauncherChangedFunc launcher_callback, ScriptsChangedFunc scripts_callback,
+                       gpointer user_data)
 {
     Settings *state = g_new0(Settings, 1);
     state->changed = changed;
     state->restore_changed = restore_callback;
     state->output_changed = output_callback;
     state->launcher_changed = launcher_callback;
+    state->scripts_changed = scripts_callback;
     state->user_data = user_data;
     GtkWidget *page = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(page), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
@@ -289,13 +354,28 @@ GtkWidget *settings_new(const EditorSettings *settings, SettingsChangedFunc chan
     g_signal_connect(state->restore_tabs, "notify::active", G_CALLBACK(restore_changed), state);
 
     GtkWidget *output_group = NULL;
-    section_new(left, "Output", &output_group);
+    section_new(right, "Output", &output_group);
     state->output = GTK_SWITCH(gtk_switch_new());
     gtk_widget_add_css_class(GTK_WIDGET(state->output), "redirect-output");
     gtk_accessible_update_property(GTK_ACCESSIBLE(state->output),
         GTK_ACCESSIBLE_PROPERTY_LABEL, "Redirect script output", -1);
     add_row(output_group, "Redirect script output", "Show your scripts’ output below the editor", GTK_WIDGET(state->output));
     g_signal_connect(state->output, "notify::active", G_CALLBACK(output_changed), state);
+
+    GtkWidget *scripts_group = NULL;
+    section_new(right, "Scripts", &scripts_group);
+    GtkWidget *scripts = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+    state->scripts_button = gtk_button_new_with_label("Select…");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(state->scripts_button),
+        GTK_ACCESSIBLE_PROPERTY_LABEL, "Select script folder", -1);
+    gtk_box_append(GTK_BOX(scripts), state->scripts_button);
+    state->scripts_path_label = GTK_LABEL(gtk_label_new("None selected"));
+    gtk_label_set_ellipsize(state->scripts_path_label, PANGO_ELLIPSIZE_MIDDLE);
+    gtk_label_set_max_width_chars(state->scripts_path_label, 16);
+    gtk_widget_add_css_class(GTK_WIDGET(state->scripts_path_label), "settings-description");
+    gtk_box_append(GTK_BOX(scripts), GTK_WIDGET(state->scripts_path_label));
+    add_row(scripts_group, "Script folder", "Folder shown in the Scripts library", scripts);
+    g_signal_connect(state->scripts_button, "clicked", G_CALLBACK(select_scripts), page);
 
     GtkWidget *launcher_group = NULL;
     section_new(right, "Profiles", &launcher_group);

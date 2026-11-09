@@ -11,6 +11,7 @@ typedef struct {
     gboolean (*restore_tabs_changed)(gboolean enabled, GError **error, gpointer user_data);
     gboolean (*output_changed)(gboolean enabled, GError **error, gpointer user_data);
     gboolean (*launcher_changed)(const char *path, GError **error, gpointer user_data);
+    gboolean (*scripts_changed)(const char *path, GError **error, gpointer user_data);
     void (*socket_selected)(const char *path, gpointer user_data);
     void (*launch_profile)(const char *name, gpointer user_data);
     gboolean (*profile_running)(const char *name, gpointer user_data);
@@ -27,6 +28,7 @@ void window_set_output_status(GtkWindow *window, const char *path, const char *t
 void window_append_output(GtkWindow *window, const char *path, const char *level, const char *text);
 void window_set_output_target(GtkWindow *window, const char *path);
 void window_set_launcher(GtkWindow *window, const char *path);
+void window_set_scripts_path(GtkWindow *window, const char *path);
 void window_show_settings(GtkWindow *window);
 void window_update_profiles(GtkWindow *window, const char *const *names,
                             const char *const *sockets, const char *selected);

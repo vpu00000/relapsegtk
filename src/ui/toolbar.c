@@ -32,6 +32,13 @@ void toolbar_set_active_enabled(GtkWidget *toolbar, gboolean enabled)
     gtk_widget_set_sensitive(state->delete_btn, enabled);
 }
 
+void toolbar_set_scripts_path(GtkWidget *toolbar, const char *path)
+{
+    Toolbar *state = toolbar_data(toolbar);
+    g_autoptr(GFile) folder = g_file_new_for_path(path);
+    gtk_file_dialog_set_initial_folder(state->dialog, folder);
+}
+
 void toolbar_set_status(GtkWidget *toolbar, const char *label, const char *description, gboolean ready)
 {
     Toolbar *state = toolbar_data(toolbar);

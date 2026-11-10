@@ -11,7 +11,7 @@ typedef struct {
 
 GtkWidget *toolbar_new(GtkWindow *parent, const char *scripts_path, GtkWidget *socket_picker,
                        const ToolbarHandlers *handlers, gpointer user_data);
-void toolbar_set_execute_enabled(GtkWidget *toolbar, gboolean enabled);
+void toolbar_set_execute_state(GtkWidget *toolbar, gboolean enabled, guint ready, guint selected);
 void toolbar_set_active_enabled(GtkWidget *toolbar, gboolean enabled);
 void toolbar_set_status(GtkWidget *toolbar, const char *label, const char *description, gboolean ready);
 void toolbar_set_scripts_path(GtkWidget *toolbar, const char *path);

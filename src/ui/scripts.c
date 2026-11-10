@@ -449,7 +449,7 @@ GtkWidget *scripts_new(const char *path, ScriptOpenFunc open_script,
     g_autoptr(GtkStringList) sources = gtk_string_list_new(NULL);
     gtk_string_list_append(sources, "Scripts");
     gtk_string_list_append(sources, "Autoexec");
-    GtkWidget *title = gtk_drop_down_new(G_LIST_MODEL(sources), NULL);
+    GtkWidget *title = gtk_drop_down_new(G_LIST_MODEL(g_steal_pointer(&sources)), NULL);
     gtk_widget_add_css_class(title, "scripts-title");
     gtk_widget_add_css_class(title, "socket-picker");
     gtk_drop_down_set_enable_search(GTK_DROP_DOWN(title), FALSE);

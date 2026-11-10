@@ -19,6 +19,7 @@ typedef struct {
 
 Sessions *sessions_new(const SessionHandlers *handlers, gpointer user_data);
 void sessions_update(Sessions *sessions, const char *const *paths);
+char **sessions_list_active(Sessions *sessions);
 gboolean sessions_is_active(Sessions *sessions, const char *path);
 void sessions_set_output_enabled(Sessions *sessions, gboolean enabled);
 SocketClient *sessions_get_client(Sessions *sessions, const char *path);

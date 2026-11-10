@@ -192,6 +192,26 @@ void sessions_set_output_enabled(Sessions *sessions, gboolean enabled)
         ui_bridge_set_output_enabled(((Session *)value)->bridge, enabled);
 }
 
+static gint compare_paths(gconstpointer left, gconstpointer right)
+{
+    return g_strcmp0(*(const char *const *)left, *(const char *const *)right);
+}
+
+char **sessions_list_active(Sessions *sessions)
+{
+    GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+    GHashTableIter iter;
+    gpointer value;
+    g_hash_table_iter_init(&iter, sessions->clients);
+    while (g_hash_table_iter_next(&iter, NULL, &value)) {
+        Session *session = value;
+        if (session->available || process_running(session)) g_ptr_array_add(paths, g_strdup(session->path));
+    }
+    g_ptr_array_sort(paths, compare_paths);
+    g_ptr_array_add(paths, NULL);
+    return (char **)g_ptr_array_free(paths, FALSE);
+}
+
 static Session *lookup(Sessions *sessions, const char *path)
 {
     return sessions && path ? g_hash_table_lookup(sessions->clients, path) : NULL;

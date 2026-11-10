@@ -13,6 +13,7 @@ pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4>=4.16)
 pkg_check_modules(GTKSOURCE REQUIRED IMPORTED_TARGET gtksourceview-5>=5.16)
 pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-unix-2.0)
 pkg_check_modules(JSON_GLIB REQUIRED IMPORTED_TARGET json-glib-1.0)
+pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl>=7.85)
 
 add_library(relapse-settings STATIC src/settings/editor.c src/settings/session.c src/settings/output.c src/settings/store.c src/settings/launcher.c src/settings/scripts.c)
 target_compile_features(relapse-settings PUBLIC c_std_11)
@@ -24,10 +25,10 @@ target_compile_features(relapse-state PUBLIC c_std_11)
 target_include_directories(relapse-state PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(relapse-state PUBLIC PkgConfig::GIO PRIVATE PkgConfig::JSON_GLIB)
 
-add_library(relapse-profiles STATIC src/profiles/store.c)
+add_library(relapse-profiles STATIC src/profiles/store.c src/profiles/account.c)
 target_compile_features(relapse-profiles PUBLIC c_std_11)
 target_include_directories(relapse-profiles PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(relapse-profiles PUBLIC PkgConfig::GIO)
+target_link_libraries(relapse-profiles PUBLIC PkgConfig::GIO PRIVATE PkgConfig::JSON_GLIB PkgConfig::CURL)
 
 add_library(relapse-socket STATIC src/socket/transport.c src/socket/client.c)
 target_compile_features(relapse-socket PUBLIC c_std_11)
@@ -47,7 +48,7 @@ pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
 add_library(relapse-ui STATIC
     src/ui/window.c src/ui/style.c src/ui/editor.c src/ui/scripts.c src/ui/tabs.c src/ui/settings.c
     src/ui/tab_strip.c src/ui/toolbar.c src/ui/output.c src/ui/search.c src/ui/shader_strip.c src/ui/profiles.c src/ui/console.c
-    src/ui/picker.c)
+    src/ui/picker.c src/ui/accounts.c)
 target_compile_features(relapse-ui PUBLIC c_std_11)
 target_include_directories(relapse-ui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(relapse-ui PUBLIC PkgConfig::GTK4 relapse-settings relapse-profiles PRIVATE relapse-state PkgConfig::GTKSOURCE PkgConfig::EPOXY)

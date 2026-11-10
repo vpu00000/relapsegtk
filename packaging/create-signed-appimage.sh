@@ -34,9 +34,11 @@ if [[ ! -f "$ENV_FILE" ]]; then
     echo "Create $SCRIPT_DIR/publish.env from publish.env.example first" >&2
     exit 1
 fi
+requested_release_tag="${RELEASE_TAG:-}"
 set -a
 source "$ENV_FILE"
 set +a
+RELEASE_TAG="${requested_release_tag:-${RELEASE_TAG:-}}"
 : "${GNUPGHOME:?Set GNUPGHOME in publish.env}"
 : "${GITHUB_REPOSITORY:?Set GITHUB_REPOSITORY in publish.env}"
 [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
@@ -55,6 +57,13 @@ VERSION="${RELEASE_TAG#v}"
     echo "RELEASE_TAG contains unsupported characters" >&2
     exit 1
 }
+if release_commit="$(git -C "$ROOT_DIR" rev-parse --verify --quiet "refs/tags/$RELEASE_TAG^{commit}")"; then
+    if [[ "$release_commit" != "$(git -C "$ROOT_DIR" rev-parse HEAD)" ]]; then
+        printf 'RELEASE_TAG %s does not point to HEAD. Remove the stale RELEASE_TAG from %s or check out that tag.\n' \
+            "$RELEASE_TAG" "$ENV_FILE" >&2
+        exit 1
+    fi
+fi
 export GNUPGHOME
 PUBLIC_KEY="$GNUPGHOME/relapsegtk-release.gpg"
 BUILD_DIR="$ROOT_DIR/Build/Release"

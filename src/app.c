@@ -21,7 +21,7 @@ typedef struct {
     Sessions *sessions;
     char *scripts_path;
     char *launcher_path;
-    char *socket_path;
+    char **socket_paths;
     guint discovery;
     gboolean redirect_output;
     GHashTable *launches;
@@ -85,13 +85,13 @@ static void console_input(const char *path, gint64 id, gpointer user_data)
     console_window_request_input(console_view(user_data, path)->window, id);
 }
 
+static void update_connection_status(App *app);
+
 #ifdef RELAPSEGTK_UPDATE_ENABLED
 typedef struct {
     GWeakRef window;
     UpdateInfo *info;
 } UpdateChoice;
-
-static void update_connection_status(App *app);
 
 static void free_update_choice(UpdateChoice *choice)
 {
@@ -172,14 +172,20 @@ static void check_updates(App *app)
 }
 #endif
 
-static gboolean refresh_profiles(gpointer user_data);
+static guint count_ready_clients(App *app)
+{
+    guint ready = 0;
+    for (guint i = 0; app->socket_paths && app->socket_paths[i]; ++i)
+        if (sessions_can_execute(app->sessions, app->socket_paths[i])) ++ready;
+    return ready;
+}
 
 static void update_execute(gpointer user_data)
 {
     App *app = user_data;
-    window_set_execute_enabled(app->window,
-        sessions_can_execute(app->sessions, app->socket_path) &&
-        window_get_buffer(app->window) != NULL);
+    guint selected = app->socket_paths ? g_strv_length(app->socket_paths) : 0;
+    guint ready = count_ready_clients(app);
+    window_set_execute_state(app->window, ready > 0 && window_get_buffer(app->window) != NULL, ready, selected);
 }
 
 static void output_state_changed(const char *path, OutputState state, const char *detail, gpointer user_data)
@@ -189,7 +195,7 @@ static void output_state_changed(const char *path, OutputState state, const char
         sessions_is_active(app->sessions, path));
     if (state == OUTPUT_FAILED)
         window_append_output(app->window, path, "error", detail);
-    update_execute(app);
+    update_connection_status(app);
 }
 
 static void output_entry(const char *path, const char *level, const char *text, gpointer user_data)
@@ -226,7 +232,14 @@ static gboolean save_restore_tabs(gboolean enabled, GError **error, gpointer use
 
 static void update_connection_status(App *app)
 {
-    switch (sessions_get_state(app->sessions, app->socket_path)) {
+    guint selected = app->socket_paths ? g_strv_length(app->socket_paths) : 0;
+    if (selected > 1) {
+        guint ready = count_ready_clients(app);
+        g_autofree char *label = g_strdup_printf("%u of %u ready", ready, selected);
+        window_set_status(app->window, label, "Execute sends to the selected clients that are ready.", ready > 0);
+    } else if (!selected) {
+        window_set_status(app->window, "No target", "Select clients beside Execute.", FALSE);
+    } else switch (sessions_get_state(app->sessions, app->socket_paths[0])) {
         case SOCKET_CLIENT_READY:
             window_set_status(app->window, "Ready", "Connected. Ready to execute scripts.", TRUE);
             break;
@@ -250,7 +263,7 @@ static void socket_state_changed(const char *path, SocketClientState state, cons
         window_set_output_status(app->window, path,
             !active ? "Closed" : state == SOCKET_CLIENT_WAITING ? "Waiting for a game" : "Reconnecting…", active);
     }
-    if (g_strcmp0(path, app->socket_path) == 0) update_connection_status(app);
+    if (app->socket_paths && g_strv_contains((const char *const *)app->socket_paths, path)) update_connection_status(app);
 }
 
 static void script_result(const char *path, gint64 script_id, gboolean submitted, const char *detail, gpointer user_data)
@@ -261,16 +274,14 @@ static void script_result(const char *path, gint64 script_id, gboolean submitted
         window_append_output(app->window, path, "error", detail ? detail : "Script submission failed.");
 }
 
-static void select_socket(const char *path, gpointer user_data)
+static void select_socket(const char *const *paths, gpointer user_data)
 {
     App *app = user_data;
-    if (g_strcmp0(path, app->socket_path) == 0) return;
-    g_autofree char *selected = g_strdup(path);
-    g_free(app->socket_path);
-    app->socket_path = g_steal_pointer(&selected);
-    window_set_output_target(app->window, app->socket_path);
+    g_auto(GStrv) selected = g_strdupv((char **)paths);
+    g_strfreev(app->socket_paths);
+    app->socket_paths = g_steal_pointer(&selected);
+    if (paths[0] && !paths[1]) window_set_output_target(app->window, paths[0]);
     update_connection_status(app);
-    refresh_profiles(app);
 }
 
 static gboolean refresh_profiles(gpointer user_data)
@@ -279,12 +290,9 @@ static gboolean refresh_profiles(gpointer user_data)
     g_auto(GStrv) names = profiles_list();
     g_auto(GStrv) sockets = profile_sockets_list("/tmp");
     sessions_update(app->sessions, (const char *const *)sockets);
-    if ((!app->socket_path && sockets[0]) || (app->socket_path && !sockets[0])) {
-        select_socket(sockets[0], app);
-        return G_SOURCE_CONTINUE;
-    }
+    g_auto(GStrv) active = sessions_list_active(app->sessions);
     window_update_profiles(app->window, (const char *const *)names,
-        (const char *const *)sockets, app->socket_path);
+        (const char *const *)active);
     update_connection_status(app);
     return G_SOURCE_CONTINUE;
 }
@@ -329,73 +337,60 @@ static void launch_finished(GObject *process, GAsyncResult *result, gpointer use
     if (app && app->window) {
         g_hash_table_remove(app->launches, launch->name);
         refresh_profiles(app);
-        if (!success) {
-            g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Profile %s exited with an error", launch->name);
-            gtk_alert_dialog_set_detail(alert, error->message);
-            gtk_alert_dialog_show(alert, window);
-        }
+        if (!success) window_set_profile_launch_error(window, launch->name, error->message);
     }
     g_weak_ref_clear(&launch->window);
     g_free(launch->name);
     g_free(launch);
 }
 
-static void launch_profile(const char *name, gpointer user_data)
+static gboolean launch_profile(const char *name, const char *place_id, const char *job_id,
+                                GError **error, gpointer user_data)
 {
     App *app = user_data;
-    g_autoptr(GError) error = NULL;
     if (!app->launcher_path || !*app->launcher_path) {
-        window_show_settings(app->window);
-        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Select a launcher first");
-        gtk_alert_dialog_set_detail(alert, "Choose your launcher executable under Profiles in Settings, then launch again.");
-        gtk_alert_dialog_show(alert, app->window);
-        return;
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Choose a launcher in Settings first.");
+        return FALSE;
     }
     if (g_hash_table_contains(app->launches, name)) {
-        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Profile %s is already running", name);
-        gtk_alert_dialog_set_detail(alert, "Select its socket in the titlebar to connect when it becomes available.");
-        gtk_alert_dialog_show(alert, app->window);
-        return;
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "This profile is already running.");
+        return FALSE;
     }
-    GSubprocess *process = profile_launch(app->launcher_path, name, &error);
-    if (!process) {
-        g_autoptr(GtkAlertDialog) alert = gtk_alert_dialog_new("Could not launch Profile %s", name);
-        gtk_alert_dialog_set_detail(alert, error->message);
-        gtk_alert_dialog_show(alert, app->window);
-        return;
-    }
+    GSubprocess *process = profile_launch(app->launcher_path, name, place_id, job_id, error);
+    if (!process) return FALSE;
     g_hash_table_insert(app->launches, g_strdup(name), process);
     Launch *launch = g_new0(Launch, 1);
     g_weak_ref_init(&launch->window, app->window);
     launch->name = g_strdup(name);
     g_subprocess_wait_check_async(process, NULL, launch_finished, launch);
     refresh_profiles(app);
+    return TRUE;
 }
 
 static void execute_script(gpointer user_data)
 {
     App *app = user_data;
     GtkTextBuffer *buffer = window_get_buffer(app->window);
-    if (!buffer || !sessions_can_execute(app->sessions, app->socket_path))
+    if (!buffer || !app->socket_paths || !app->socket_paths[0])
         return;
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buffer, &start, &end);
     g_autofree char *source = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
-    switch (sessions_execute(app->sessions, app->socket_path, window_get_script_name(app->window), source)) {
-        case SOCKET_CLIENT_QUEUED:
-            break;
-        case SOCKET_CLIENT_NOT_READY:
-            g_printerr("Executor is not ready\n");
-            break;
-        case SOCKET_CLIENT_TOO_LARGE:
-            g_printerr("Script is too large\n");
-            break;
-        case SOCKET_CLIENT_BACKPRESSURE:
-            g_printerr("Send queue is full — try again\n");
-            break;
-        case SOCKET_CLIENT_IDS_EXHAUSTED:
-            g_printerr("Restart to reset script IDs\n");
-            break;
+    g_autofree char *name = g_strdup(window_get_script_name(app->window));
+    g_auto(GStrv) targets = g_strdupv(app->socket_paths);
+    for (guint i = 0; targets[i]; ++i) {
+        const char *failure = NULL;
+        SocketClientSendResult result = sessions_can_execute(app->sessions, targets[i])
+            ? sessions_execute(app->sessions, targets[i], name, source) : SOCKET_CLIENT_NOT_READY;
+        switch (result) {
+            case SOCKET_CLIENT_QUEUED: continue;
+            case SOCKET_CLIENT_NOT_READY: failure = "Client is not ready; script was not sent."; break;
+            case SOCKET_CLIENT_TOO_LARGE: failure = "Script is too large."; break;
+            case SOCKET_CLIENT_BACKPRESSURE: failure = "Send queue is full — try again."; break;
+            case SOCKET_CLIENT_IDS_EXHAUSTED: failure = "Restart to reset script IDs."; break;
+        }
+        window_append_output(app->window, targets[i], "error", failure);
+        g_printerr("%s: %s\n", targets[i], failure);
     }
 }
 
@@ -417,7 +412,7 @@ static void free_app(gpointer user_data)
     window_destroyed(NULL, app);
     g_free(app->scripts_path);
     g_free(app->launcher_path);
-    g_free(app->socket_path);
+    g_strfreev(app->socket_paths);
     g_hash_table_unref(app->launches);
     g_hash_table_unref(app->consoles);
     g_free(app);

@@ -165,26 +165,14 @@ window.relapse-ui.fullscreen headerbar {
     background-color: var(--relapse-selection);
 }
 
-.relapse-ui .profiles-list entry {
-    min-height: 28px;
-    padding: 0 8px;
-    background-color: var(--relapse-editor);
-    border: 1px solid var(--relapse-border);
-    border-radius: 3px;
-}
-
-.relapse-ui .profiles-list entry:focus-within {
-    border-color: var(--relapse-focus);
-}
-
-.relapse-ui .profiles-list entry selection {
-    background-color: var(--relapse-selection);
-}
-
 .relapse-ui .socket-picker > button {
     min-height: 26px;
     border-color: transparent;
     background-color: transparent;
+}
+
+.relapse-ui .execution-picker > button {
+    padding: 0 10px;
 }
 
 .relapse-ui .socket-picker > button:focus-visible {
@@ -192,72 +180,37 @@ window.relapse-ui.fullscreen headerbar {
     outline-offset: 0;
 }
 
-.relapse-ui .socket-picker.empty arrow {
-    min-width: 0;
-    margin-left: 0;
-    -gtk-icon-size: 0;
-    background-image: none;
-}
-
 .relapse-ui .socket-picker popover contents {
     min-width: 240px;
 }
 
-.relapse-ui .profile-picker {
-    padding: 8px;
-    border-top: 1px solid var(--relapse-border);
+.relapse-ui .socket-picker .socket-name {
+    font-size: 12px;
 }
 
-.relapse-ui button.profiles-button {
-    padding: 0 8px;
-    min-height: 32px;
+.relapse-ui .socket-picker .socket-profile {
+    font-size: 11px;
+    color: var(--relapse-muted);
 }
 
-.relapse-ui .profiles-content {
-    padding: 16px;
+.relapse-ui .socket-picker .socket-current .socket-profile {
+    font-size: 10px;
 }
 
-.relapse-ui .profiles-list {
-    background-color: var(--relapse-editor);
-    border: 1px solid var(--relapse-border);
+.relapse-ui .socket-choices listview row {
+    min-height: 28px;
+    padding: 4px 8px;
     border-radius: 3px;
 }
 
-.relapse-ui .profiles-list row {
-    min-height: 36px;
-    padding: 2px 8px;
-}
-
-.relapse-ui .profiles-list row:hover {
-    background-color: var(--relapse-hover);
-}
-
-.relapse-ui .profiles-list row:selected {
+.relapse-ui .socket-choices listview row:hover,
+.relapse-ui .socket-choices listview row:selected {
     background-color: var(--relapse-selection);
 }
 
-.relapse-ui .profiles-list row:focus-visible {
+.relapse-ui .socket-choices listview row:focus-visible {
     outline: 1px solid var(--relapse-focus);
     outline-offset: -1px;
-}
-
-.relapse-ui button.profile-action {
-    min-width: 24px;
-    min-height: 24px;
-    padding: 0;
-    border-color: transparent;
-    background-color: transparent;
-}
-
-.relapse-ui button.profile-action:disabled image {
-    opacity: 0.3;
-}
-
-.relapse-ui button.add-profile {
-    min-height: 28px;
-    border-color: transparent;
-    background-color: transparent;
-    color: var(--relapse-muted);
 }
 
 .relapse-ui button:focus-visible {
@@ -567,6 +520,238 @@ window.relapse-ui.fullscreen headerbar {
 .relapse-ui .indent-options button:checked {
     background-color: var(--relapse-selection);
     box-shadow: inset 0 -2px var(--relapse-focus);
+}
+
+.relapse-ui .accounts-page {
+    padding: 10px 12px;
+}
+
+.relapse-ui .accounts-title {
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.relapse-ui entry.accounts-search,
+.relapse-ui entry.accounts-join-entry {
+    min-height: 24px;
+    padding: 0 6px;
+    background-color: var(--relapse-editor);
+    border: 1px solid var(--relapse-border);
+    border-radius: 3px;
+}
+
+.relapse-ui entry.accounts-search:focus-within,
+.relapse-ui entry.accounts-join-entry:focus-within {
+    border-color: var(--relapse-focus);
+}
+
+.relapse-ui entry.accounts-search text,
+.relapse-ui entry.accounts-search label,
+.relapse-ui entry.accounts-join-entry text,
+.relapse-ui entry.accounts-join-entry label {
+    font-size: 12px;
+}
+
+.relapse-ui entry.accounts-search selection,
+.relapse-ui entry.accounts-join-entry selection {
+    background-color: var(--relapse-selection);
+}
+
+.relapse-ui entry.accounts-search image {
+    -gtk-icon-size: 12px;
+    color: var(--relapse-muted);
+    margin: 0 4px;
+}
+
+.relapse-ui .accounts-filter > button {
+    min-height: 24px;
+    padding: 0 7px;
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.relapse-ui .accounts-filter label {
+    font-size: 12px;
+}
+
+.relapse-ui .accounts-list {
+    background-color: var(--relapse-editor);
+    border: 1px solid var(--relapse-border);
+    border-radius: 4px;
+}
+
+.relapse-ui .account-row {
+    padding: 5px 8px;
+    border-bottom: 1px solid alpha(var(--relapse-border), 0.5);
+}
+
+.relapse-ui .account-row:last-child {
+    border-bottom: 0;
+}
+
+.relapse-ui .account-row.running {
+    box-shadow: inset 2px 0 #adcc92;
+}
+
+.relapse-ui .account-row:hover {
+    background-color: alpha(var(--relapse-selection), 0.18);
+}
+
+.relapse-ui .account-row:selected {
+    background-color: alpha(var(--relapse-selection), 0.5);
+}
+
+.relapse-ui .account-row:focus-visible {
+    outline: 1px solid var(--relapse-focus);
+    outline-offset: -2px;
+}
+
+.relapse-ui .account-select check {
+    min-width: 12px;
+    min-height: 12px;
+    border: 1px solid var(--relapse-border);
+    border-radius: 2px;
+    background-color: var(--relapse-editor);
+    -gtk-icon-size: 12px;
+}
+
+.relapse-ui .account-select check:checked {
+    -gtk-icon-source: -gtk-icontheme("object-select-symbolic");
+    background-color: var(--relapse-selection);
+    border-color: var(--relapse-muted);
+}
+
+.relapse-ui .account-select:focus-visible check {
+    outline: 1px solid var(--relapse-focus);
+    outline-offset: 2px;
+}
+
+.relapse-ui .account-select:disabled check {
+    opacity: 0.35;
+}
+
+.relapse-ui .account-name {
+    font-weight: 600;
+}
+
+.relapse-ui .account-detail {
+    color: var(--relapse-muted);
+    font-size: 11px;
+}
+
+.relapse-ui .account-avatar {
+    border-radius: 4px;
+}
+
+.relapse-ui .account-settings > button {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+    border-color: transparent;
+    background-color: transparent;
+}
+
+.relapse-ui .account-settings > button image {
+    opacity: 0.65;
+}
+
+.relapse-ui .account-settings > button:hover image {
+    opacity: 1;
+}
+
+.relapse-ui .accounts-actions {
+    padding-top: 8px;
+    border-top: 1px solid var(--relapse-border);
+}
+
+.relapse-ui button.accounts-launch {
+    min-width: 76px;
+    min-height: 24px;
+    padding: 0 8px;
+}
+
+.relapse-ui button.accounts-launch label {
+    font-size: 12px;
+}
+
+.relapse-ui button.accounts-clear-selection {
+    min-width: 20px;
+    min-height: 24px;
+    padding: 0;
+    background-color: transparent;
+    border-color: transparent;
+    -gtk-icon-size: 12px;
+}
+
+.relapse-ui .account-running {
+    font-size: 11px;
+    color: #adcc92;
+    margin-right: 4px;
+}
+
+.relapse-ui button.accounts-refresh,
+.relapse-ui .accounts-add > button {
+    min-height: 24px;
+    min-width: 24px;
+    padding: 0 7px;
+}
+
+.relapse-ui button.accounts-refresh {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.relapse-ui button.accounts-refresh label,
+.relapse-ui .accounts-add > button label {
+    font-size: 12px;
+}
+
+.relapse-ui popover.account-menu contents {
+    padding: 4px;
+    min-width: 144px;
+}
+
+.relapse-ui popover.account-menu button.menu-item {
+    min-height: 26px;
+    padding: 0 8px;
+    border: 0;
+    background-color: transparent;
+}
+
+.relapse-ui popover.account-menu button.menu-item:hover:not(:disabled) {
+    background-color: var(--relapse-hover);
+}
+
+.relapse-ui popover.account-menu button.menu-item label {
+    font-size: 12px;
+}
+
+.relapse-ui popover.account-menu button.destructive-action:not(:disabled) label,
+.relapse-ui .account-dialog button.destructive-action:not(:disabled) label {
+    color: #ef9393;
+}
+
+.relapse-ui .account-dialog {
+    padding: 16px;
+}
+
+.relapse-ui .account-dialog entry,
+.relapse-ui .account-dialog passwordentry {
+    min-height: 32px;
+    padding: 0 8px;
+    background-color: var(--relapse-editor);
+    border: 1px solid var(--relapse-border);
+    border-radius: 3px;
+}
+
+.relapse-ui .account-dialog entry:focus-within,
+.relapse-ui .account-dialog passwordentry:focus-within {
+    border-color: var(--relapse-focus);
+}
+
+.relapse-ui .account-dialog entry selection,
+.relapse-ui .account-dialog passwordentry selection {
+    background-color: var(--relapse-selection);
 }
 
 .relapse-ui .scripts-sidebar {

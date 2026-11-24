@@ -3,8 +3,9 @@
 #include <gtk/gtk.h>
 
 typedef void (*ConsoleInputFunc)(gint64 id, const char *text, gpointer user_data);
+typedef void (*ConsoleCloseFunc)(gpointer user_data);
 
-GtkWindow *console_window_new(GtkWindow *parent, ConsoleInputFunc input, gpointer user_data);
+GtkWindow *console_window_new(GtkWindow *parent, ConsoleInputFunc input, ConsoleCloseFunc closed, gpointer user_data);
 void console_window_show(GtkWindow *window, gboolean visible);
 void console_window_set_title(GtkWindow *window, const char *title);
 void console_window_clear(GtkWindow *window);

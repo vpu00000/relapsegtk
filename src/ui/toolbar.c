@@ -5,8 +5,6 @@ typedef struct {
     GtkFileDialog *dialog;
     GCancellable *pending;
     GtkWidget *open;
-    GtkWidget *save;
-    GtkWidget *delete_btn;
     GtkWidget *execute;
     GtkLabel *execute_label;
     GtkWidget *status;
@@ -34,13 +32,6 @@ void toolbar_set_execute_state(GtkWidget *toolbar, gboolean enabled, guint ready
     gtk_accessible_update_property(GTK_ACCESSIBLE(state->execute), GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
 }
 
-void toolbar_set_active_enabled(GtkWidget *toolbar, gboolean enabled)
-{
-    Toolbar *state = toolbar_data(toolbar);
-    gtk_widget_set_sensitive(state->save, enabled);
-    gtk_widget_set_sensitive(state->delete_btn, enabled);
-}
-
 void toolbar_set_scripts_path(GtkWidget *toolbar, const char *path)
 {
     Toolbar *state = toolbar_data(toolbar);
@@ -51,7 +42,8 @@ void toolbar_set_scripts_path(GtkWidget *toolbar, const char *path)
 void toolbar_set_status(GtkWidget *toolbar, const char *label, const char *description, gboolean ready)
 {
     Toolbar *state = toolbar_data(toolbar);
-    gtk_label_set_text(GTK_LABEL(state->status_label), label);
+    gtk_label_set_text(GTK_LABEL(state->status_label), label ? label : "");
+    gtk_widget_set_visible(state->status_label, label && *label);
     gtk_widget_set_tooltip_text(state->status, description);
     if (ready)
         gtk_widget_add_css_class(state->status, "ready");
@@ -139,33 +131,16 @@ static void execute_clicked(GtkButton *button, gpointer user_data)
         toolbar->handlers.execute(toolbar->user_data);
 }
 
-static void save_clicked(GtkButton *button, gpointer user_data)
+static void add_tool(GtkWidget *toolbar, GtkWidget *button, const char *icon, const char *hint)
 {
-    Toolbar *toolbar = user_data;
-    if (!toolbar->stopped && gtk_widget_get_sensitive(GTK_WIDGET(button)) && toolbar->handlers.save_active)
-        toolbar->handlers.save_active(toolbar->user_data);
-}
-
-static void delete_clicked(GtkButton *button, gpointer user_data)
-{
-    Toolbar *toolbar = user_data;
-    if (!toolbar->stopped && gtk_widget_get_sensitive(GTK_WIDGET(button)) && toolbar->handlers.delete_active)
-        toolbar->handlers.delete_active(toolbar->user_data);
-}
-
-static GtkWidget *action_button(const char *label, const char *icon, GtkLabel **label_widget)
-{
-    GtkWidget *button = gtk_button_new();
-    GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *image = gtk_image_new_from_resource(icon);
     gtk_image_set_pixel_size(GTK_IMAGE(image), 16);
-    gtk_box_append(GTK_BOX(content), image);
-    GtkWidget *text = gtk_label_new(label);
-    gtk_box_append(GTK_BOX(content), text);
-    if (label_widget) *label_widget = GTK_LABEL(text);
-    gtk_button_set_child(GTK_BUTTON(button), content);
-    gtk_accessible_update_property(GTK_ACCESSIBLE(button), GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
-    return button;
+    gtk_button_set_child(GTK_BUTTON(button), image);
+    gtk_widget_add_css_class(button, "editor-tool");
+    gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text(button, hint);
+    gtk_accessible_update_property(GTK_ACCESSIBLE(button), GTK_ACCESSIBLE_PROPERTY_LABEL, hint, -1);
+    gtk_box_append(GTK_BOX(toolbar), button);
 }
 
 GtkWidget *toolbar_new(GtkWindow *parent, const char *scripts_path, GtkWidget *socket_picker,
@@ -197,9 +172,24 @@ GtkWidget *toolbar_new(GtkWindow *parent, const char *scripts_path, GtkWidget *s
     gtk_file_dialog_set_filters(state->dialog, G_LIST_MODEL(filters));
     gtk_file_dialog_set_default_filter(state->dialog, scripts);
 
-    GtkWidget *toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 3);
     gtk_widget_add_css_class(toolbar, "editor-toolbar");
     g_object_set_data_full(G_OBJECT(toolbar), "toolbar", state, free_toolbar);
+    state->open = gtk_button_new();
+    add_tool(toolbar, state->open, "/org/relapse/RelapseGtk/icons/folder-open.svg", "Open script");
+    g_signal_connect(state->open, "clicked", G_CALLBACK(open_clicked), toolbar);
+
+    GtkWidget *save = gtk_button_new();
+    add_tool(toolbar, save, "/org/relapse/RelapseGtk/icons/save.svg", "Save script (Ctrl+S)");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(save), "win.save");
+
+    GtkWidget *output = gtk_toggle_button_new();
+    add_tool(toolbar, output, "/org/relapse/RelapseGtk/icons/output.svg", "Show script output");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(output), "win.show-output");
+
+    GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(spacer, TRUE);
+    gtk_box_append(GTK_BOX(toolbar), spacer);
     state->status = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_add_css_class(state->status, "connection-status");
     gtk_widget_set_valign(state->status, GTK_ALIGN_CENTER);
@@ -214,33 +204,18 @@ GtkWidget *toolbar_new(GtkWindow *parent, const char *scripts_path, GtkWidget *s
     gtk_box_append(GTK_BOX(state->status), state->status_label);
     gtk_box_append(GTK_BOX(toolbar), state->status);
     toolbar_set_status(toolbar, "Disconnected", "Not connected. Retrying automatically.", FALSE);
-    GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_hexpand(spacer, TRUE);
-    gtk_box_append(GTK_BOX(toolbar), spacer);
-    state->open = action_button("Open", "/org/relapse/RelapseGtk/icons/folder-open.svg", NULL);
-    gtk_widget_add_css_class(state->open, "open-script-button");
-    gtk_widget_set_tooltip_text(state->open, "Open a script from a file");
-    gtk_box_append(GTK_BOX(toolbar), state->open);
-    g_signal_connect(state->open, "clicked", G_CALLBACK(open_clicked), toolbar);
-
-    state->save = action_button("Save", "/org/relapse/RelapseGtk/icons/save.svg", NULL);
-    gtk_widget_add_css_class(state->save, "save-script-button");
-    gtk_widget_set_tooltip_text(state->save, "Save the current script (Ctrl+S)");
-    gtk_widget_set_sensitive(state->save, FALSE);
-    gtk_box_append(GTK_BOX(toolbar), state->save);
-    g_signal_connect(state->save, "clicked", G_CALLBACK(save_clicked), state);
-
-    state->delete_btn = action_button("Delete", "/org/relapse/RelapseGtk/icons/delete.svg", NULL);
-    gtk_widget_add_css_class(state->delete_btn, "delete-script-button");
-    gtk_widget_set_tooltip_text(state->delete_btn, "Delete the current script");
-    gtk_widget_set_sensitive(state->delete_btn, FALSE);
-    gtk_box_append(GTK_BOX(toolbar), state->delete_btn);
-    g_signal_connect(state->delete_btn, "clicked", G_CALLBACK(delete_clicked), state);
-
     gtk_widget_set_valign(socket_picker, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(toolbar), socket_picker);
 
-    state->execute = action_button("Execute", "/org/relapse/RelapseGtk/icons/play.svg", &state->execute_label);
+    state->execute = gtk_button_new();
+    GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+    GtkWidget *play = gtk_image_new_from_resource("/org/relapse/RelapseGtk/icons/play.svg");
+    gtk_image_set_pixel_size(GTK_IMAGE(play), 14);
+    gtk_box_append(GTK_BOX(content), play);
+    state->execute_label = GTK_LABEL(gtk_label_new("Execute"));
+    gtk_box_append(GTK_BOX(content), GTK_WIDGET(state->execute_label));
+    gtk_button_set_child(GTK_BUTTON(state->execute), content);
+    gtk_widget_set_valign(state->execute, GTK_ALIGN_CENTER);
     gtk_widget_add_css_class(state->execute, "execute-script-button");
     gtk_widget_set_sensitive(state->execute, FALSE);
     gtk_box_append(GTK_BOX(toolbar), state->execute);

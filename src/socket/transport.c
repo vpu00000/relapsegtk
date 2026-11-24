@@ -344,12 +344,6 @@ RelapseSocketState relapse_socket_get_state(const RelapseSocket *socket)
     return socket->state;
 }
 
-gsize relapse_socket_get_max_message_bytes(const RelapseSocket *socket)
-{
-    g_return_val_if_fail(socket != NULL, 0);
-    return socket->max_message_bytes;
-}
-
 GPid relapse_socket_get_peer_pid(const RelapseSocket *socket)
 {
     if (!socket || !socket->connection) return 0;

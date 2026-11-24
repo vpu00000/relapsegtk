@@ -1,12 +1,17 @@
+#define _GNU_SOURCE
 #include "tabs.h"
 
 #include "editor.h"
+#include "editor_wrap.h"
 #include "tab_strip.h"
 #include "search.h"
 #include "state/session.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/fs.h>
 #include <string.h>
-
-enum { MaxScriptBytes = 8 * 1024 * 1024 };
+#include <sys/syscall.h>
+#include <unistd.h>
 
 typedef struct {
     GtkWidget *strip;
@@ -19,7 +24,8 @@ typedef struct {
     guint session_timer;
     gint64 session_dirty_since;
     gboolean session_enabled;
-    gboolean restoring;
+    gboolean updating_pages;
+    gboolean confirming_clear;
     gboolean stopped;
 } Tabs;
 
@@ -31,7 +37,6 @@ typedef struct {
     GtkWidget *editor;
     GtkWidget *search;
     GtkWidget *tab;
-    GtkImage *icon;
     GtkLabel *label;
     GtkLabel *message;
     GFile *file;
@@ -99,7 +104,7 @@ static Script *active_script(GtkWidget *notebook)
 static void notify_changed(GtkNotebook *notebook)
 {
     Tabs *tabs = g_object_get_data(G_OBJECT(notebook), "tabs");
-    if (tabs->restoring)
+    if (tabs->updating_pages)
         return;
     schedule_session(notebook, TRUE);
     if (!tabs->stopped && tabs->changed)
@@ -109,7 +114,7 @@ static void notify_changed(GtkNotebook *notebook)
 GtkTextBuffer *tabs_get_buffer(GtkWidget *tabs)
 {
     Script *script = active_script(tabs);
-    return script && script->ready ? gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor)) : NULL;
+    return script && script->ready ? editor_document(GTK_TEXT_VIEW(script->editor)) : NULL;
 }
 
 const char *tabs_get_name(GtkWidget *tabs)
@@ -118,18 +123,28 @@ const char *tabs_get_name(GtkWidget *tabs)
     return script ? script->name : NULL;
 }
 
-void tabs_find(GtkWidget *tabs)
+static GtkWidget *script_search(Script *script)
+{
+    if (!script->search) {
+        GtkWidget *box = gtk_stack_get_child_by_name(GTK_STACK(script->page), "editor");
+        script->search = search_new(script->editor);
+        gtk_box_append(GTK_BOX(box), script->search);
+    }
+    return script->search;
+}
+
+void tabs_find(GtkWidget *tabs, gboolean replace)
 {
     Script *script = active_script(tabs);
     if (script && script->ready)
-        search_show(script->search);
+        search_show(script_search(script), replace);
 }
 
 void tabs_find_next(GtkWidget *tabs, gboolean backward)
 {
     Script *script = active_script(tabs);
     if (script && script->ready)
-        search_step(script->search, backward);
+        search_step(script_search(script), backward);
 }
 
 GFile *tabs_get_current_file(GtkWidget *tabs)
@@ -139,31 +154,9 @@ GFile *tabs_get_current_file(GtkWidget *tabs)
     return script->file ? script->file : script->save_file;
 }
 
-void tabs_close_current(GtkWidget *tabs)
-{
-    GtkNotebook *book = notebook_for(tabs);
-    int page = gtk_notebook_get_current_page(book);
-    if (page >= 0) {
-        gtk_notebook_remove_page(book, page);
-        notify_changed(book);
-    }
-}
-
-static void update_origin_icon(Script *script)
-{
-    GFile *file = script->file ? script->file : script->save_file;
-    g_autofree char *directory = g_build_filename(g_get_home_dir(), ".config", "relapse", "autoexec", NULL);
-    g_autoptr(GFile) autoexec = g_file_new_for_path(directory);
-    gboolean is_autoexec = file && g_file_has_prefix(file, autoexec);
-    if (is_autoexec)
-        gtk_image_set_from_resource(script->icon, "/org/relapse/RelapseGtk/icons/autoexec.svg");
-    gtk_widget_set_visible(GTK_WIDGET(script->icon), is_autoexec);
-}
-
 static void update_label(GtkTextBuffer *buffer, GtkWidget *page)
 {
     Script *script = g_object_get_data(G_OBJECT(page), "script");
-    update_origin_icon(script);
     g_autofree char *label = g_strdup_printf("%s%s", script->name,
         script->load ? " …" : gtk_text_buffer_get_modified(buffer) ? " •" : "");
     gtk_label_set_text(script->label, label);
@@ -204,7 +197,7 @@ static Session *snapshot(GtkNotebook *notebook)
             }
         }
         if (script->ready) {
-            GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor));
+            GtkTextBuffer *buffer = editor_document(GTK_TEXT_VIEW(script->editor));
             GtkTextIter start, end, cursor;
             gtk_text_buffer_get_bounds(buffer, &start, &end);
             tab->text = gtk_text_buffer_get_text(buffer, &start, &end, TRUE);
@@ -233,7 +226,7 @@ static gboolean write_session(gpointer user_data)
 static void schedule_session(GtkNotebook *notebook, gboolean immediate)
 {
     Tabs *tabs = g_object_get_data(G_OBJECT(notebook), "tabs");
-    if (!tabs->session_enabled || tabs->stopped || tabs->restoring)
+    if (!tabs->session_enabled || tabs->stopped || tabs->updating_pages)
         return;
     gint64 now = g_get_monotonic_time();
     if (!tabs->session_dirty_since)
@@ -318,7 +311,7 @@ static void save_to_file(Script *script, GFile *file);
 
 static GBytes *script_contents(Script *script)
 {
-    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor));
+    GtkTextBuffer *buffer = editor_document(GTK_TEXT_VIEW(script->editor));
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buffer, &start, &end);
     char *text = gtk_text_buffer_get_text(buffer, &start, &end, TRUE);
@@ -342,7 +335,7 @@ static void script_saved(GObject *file, GAsyncResult *result, gpointer user_data
             g_autofree char *path = g_file_get_parse_name(script->file);
             gtk_widget_set_tooltip_text(script->tab, path);
 
-            GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor));
+            GtkTextBuffer *buffer = editor_document(GTK_TEXT_VIEW(script->editor));
             g_autoptr(GBytes) contents = script_contents(script);
             gtk_text_buffer_set_modified(buffer, !g_bytes_equal(contents, pending->contents));
             update_label(buffer, page);
@@ -493,6 +486,94 @@ static void remove_script(Script *script)
     notify_changed(notebook);
 }
 
+static gboolean clearable_draft(Script *script)
+{
+    return script && !script->file && !script->save_file && !script->save && !script->close_prompt;
+}
+
+static gboolean draft_has_text(Script *script)
+{
+    GtkTextBuffer *buffer = editor_document(GTK_TEXT_VIEW(script->editor));
+    return gtk_text_buffer_get_char_count(buffer) > 0;
+}
+
+gboolean tabs_can_clear_untitled(GtkWidget *widget)
+{
+    GtkNotebook *book = notebook_for(widget);
+    int count = gtk_notebook_get_n_pages(book);
+    for (int i = 0; i < count; ++i) {
+        GtkWidget *page = gtk_notebook_get_nth_page(book, i);
+        Script *script = g_object_get_data(G_OBJECT(page), "script");
+        if (clearable_draft(script) && (count > 1 || draft_has_text(script)))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static void close_drafts(GtkNotebook *book, GPtrArray *pages)
+{
+    Tabs *tabs = g_object_get_data(G_OBJECT(book), "tabs");
+    tabs->updating_pages = TRUE;
+    for (guint i = 0; i < pages->len; ++i) {
+        Script *script = find_script(book, g_ptr_array_index(pages, i));
+        if (clearable_draft(script))
+            remove_script(script);
+    }
+    tabs->updating_pages = FALSE;
+    notify_changed(book);
+}
+
+static void clear_drafts_confirmed(GObject *dialog, GAsyncResult *result, gpointer user_data)
+{
+    g_autoptr(GtkNotebook) book = user_data;
+    Tabs *tabs = g_object_get_data(G_OBJECT(book), "tabs");
+    int choice = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(dialog), result, NULL);
+    tabs->confirming_clear = FALSE;
+    if (choice == 1 && !tabs->stopped)
+        close_drafts(book, g_object_get_data(dialog, "draft-pages"));
+}
+
+void tabs_clear_untitled(GtkWidget *widget)
+{
+    GtkNotebook *book = notebook_for(widget);
+    Tabs *tabs = g_object_get_data(G_OBJECT(book), "tabs");
+    if (tabs->stopped || tabs->confirming_clear || !tabs_can_clear_untitled(widget))
+        return;
+    g_autoptr(GPtrArray) pages = g_ptr_array_new_with_free_func(g_object_unref);
+    guint with_text = 0;
+    for (int i = gtk_notebook_get_n_pages(book) - 1; i >= 0; --i) {
+        GtkWidget *page = gtk_notebook_get_nth_page(book, i);
+        Script *script = g_object_get_data(G_OBJECT(page), "script");
+        if (clearable_draft(script)) {
+            g_ptr_array_add(pages, g_object_ref(page));
+            if (draft_has_text(script)) ++with_text;
+        }
+    }
+    if (!with_text) {
+        close_drafts(book, pages);
+        return;
+    }
+    g_autoptr(GtkAlertDialog) dialog = gtk_alert_dialog_new(
+        pages->len == 1 ? "Clear %u untitled tab?" : "Clear %u untitled tabs?", pages->len);
+    g_autofree char *detail = g_strdup_printf(with_text == 1
+        ? "%u tab contains unsaved text that will be discarded."
+        : "%u tabs contain unsaved text that will be discarded.", with_text);
+    gtk_alert_dialog_set_detail(dialog, detail);
+    const char *buttons[] = {"Cancel", "Discard and clear", NULL};
+    gtk_alert_dialog_set_buttons(dialog, buttons);
+    gtk_alert_dialog_set_cancel_button(dialog, 0);
+    gtk_alert_dialog_set_default_button(dialog, 0);
+    g_object_set_data_full(G_OBJECT(dialog), "draft-pages", g_steal_pointer(&pages), (GDestroyNotify)g_ptr_array_unref);
+    tabs->confirming_clear = TRUE;
+    GtkWindow *parent = GTK_WINDOW(gtk_widget_get_root(widget));
+    /* Dismiss before parent teardown and keep it alive until GTK finishes the choice. */
+    g_autoptr(GCancellable) cancel = g_cancellable_new();
+    g_signal_connect_object(parent, "unmap", G_CALLBACK(g_cancellable_cancel), cancel, G_CONNECT_SWAPPED);
+    g_object_set_data_full(G_OBJECT(dialog), "parent-window", g_object_ref(parent), g_object_unref);
+    gtk_alert_dialog_choose(dialog, parent, cancel,
+                            clear_drafts_confirmed, g_object_ref(book));
+}
+
 static void confirm_close(GObject *dialog, GAsyncResult *result, gpointer user_data)
 {
     PendingPage *pending = user_data;
@@ -514,7 +595,7 @@ static void close_tab(GtkButton *button, GtkWidget *page)
     Script *script = g_object_get_data(G_OBJECT(page), "script");
     if (script->close_prompt)
         return;
-    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor));
+    GtkTextBuffer *buffer = editor_document(GTK_TEXT_VIEW(script->editor));
     if (!gtk_text_buffer_get_modified(buffer)) {
         remove_script(script);
         return;
@@ -572,9 +653,8 @@ static Script *new_script(GtkNotebook *notebook, GFile *file, const char *name, 
     g_object_set_data_full(G_OBJECT(script->page), "script", script, free_script);
     Tabs *tabs = g_object_get_data(G_OBJECT(notebook), "tabs");
     script->editor = editor_new(&tabs->editor_settings);
-    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor));
-    gtk_text_buffer_set_text(buffer, text ? text : "", -1);
-    gtk_text_buffer_set_modified(buffer, FALSE);
+    GtkTextBuffer *buffer = editor_document(GTK_TEXT_VIEW(script->editor));
+
 
     GtkWidget *scroll = gtk_scrolled_window_new();
     gtk_widget_add_css_class(scroll, "editor");
@@ -582,9 +662,9 @@ static Script *new_script(GtkNotebook *notebook, GFile *file, const char *name, 
     gtk_scrolled_window_set_overlay_scrolling(GTK_SCROLLED_WINDOW(scroll), FALSE);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), script->editor);
     GtkWidget *editor_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    script->search = search_new(script->editor);
-    gtk_box_append(GTK_BOX(editor_box), script->search);
     gtk_box_append(GTK_BOX(editor_box), scroll);
+    gtk_text_buffer_set_text(buffer, text ? text : "", -1);
+    gtk_text_buffer_set_modified(buffer, FALSE);
     gtk_stack_add_named(GTK_STACK(script->page), editor_box, "editor");
     script->message = GTK_LABEL(gtk_label_new("Opening script…"));
     gtk_label_set_wrap(script->message, TRUE);
@@ -592,13 +672,13 @@ static Script *new_script(GtkNotebook *notebook, GFile *file, const char *name, 
     gtk_stack_add_named(GTK_STACK(script->page), GTK_WIDGET(script->message), "message");
     gtk_stack_set_visible_child_name(GTK_STACK(script->page), text ? "editor" : "message");
 
-    GtkWidget *tab = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    GtkWidget *tab = gtk_overlay_new();
     script->tab = g_object_ref_sink(tab);
     gtk_widget_add_css_class(tab, "script-tab");
     g_object_set_data(G_OBJECT(tab), "page", script->page);
     GtkWidget *select = gtk_button_new();
     gtk_widget_add_css_class(select, "tab-select");
-    gtk_box_append(GTK_BOX(tab), select);
+    gtk_overlay_set_child(GTK_OVERLAY(tab), select);
     g_signal_connect(select, "clicked", G_CALLBACK(select_script), script);
     GtkDragSource *drag = gtk_drag_source_new();
     gtk_drag_source_set_actions(drag, GDK_ACTION_MOVE);
@@ -610,20 +690,18 @@ static Script *new_script(GtkNotebook *notebook, GFile *file, const char *name, 
     script->label = GTK_LABEL(gtk_label_new(name));
     gtk_label_set_xalign(script->label, 0);
     gtk_label_set_ellipsize(script->label, PANGO_ELLIPSIZE_END);
-    gtk_label_set_width_chars(script->label, 12);
     gtk_label_set_max_width_chars(script->label, 22);
-    script->icon = GTK_IMAGE(gtk_image_new());
-    gtk_image_set_pixel_size(script->icon, 16);
-    GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_box_append(GTK_BOX(content), GTK_WIDGET(script->icon));
-    gtk_box_append(GTK_BOX(content), GTK_WIDGET(script->label));
-    gtk_button_set_child(GTK_BUTTON(select), content);
-    update_origin_icon(script);
+    gtk_button_set_child(GTK_BUTTON(select), GTK_WIDGET(script->label));
     GtkWidget *close = gtk_button_new_with_label("×");
     gtk_widget_add_css_class(close, "tab-close");
     gtk_widget_set_tooltip_text(close, "Close tab");
     gtk_accessible_update_property(GTK_ACCESSIBLE(close), GTK_ACCESSIBLE_PROPERTY_LABEL, "Close tab", -1);
-    gtk_box_append(GTK_BOX(tab), close);
+    gtk_widget_set_halign(close, GTK_ALIGN_END);
+    gtk_widget_set_valign(close, GTK_ALIGN_CENTER);
+    gtk_overlay_add_overlay(GTK_OVERLAY(tab), close);
+    GtkEventController *motion = gtk_event_controller_motion_new();
+    g_object_bind_property(motion, "contains-pointer", close, "can-target", G_BINDING_SYNC_CREATE);
+    gtk_widget_add_controller(tab, motion);
     g_signal_connect(close, "clicked", G_CALLBACK(close_tab), script->page);
     g_autofree char *path = file ? g_file_get_parse_name(file) : g_strdup(name);
     gtk_widget_set_tooltip_text(tab, path);
@@ -638,30 +716,51 @@ static Script *new_script(GtkNotebook *notebook, GFile *file, const char *name, 
     return script;
 }
 
-static gboolean read_more_script(const char *contents, goffset size, gpointer user_data)
+static void read_script(GTask *task, gpointer file, gpointer task_data, GCancellable *cancel)
 {
-    (void)contents;
-    (void)user_data;
-    return size <= MaxScriptBytes;
+    (void)task_data;
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GFileInputStream) stream = g_file_read(G_FILE(file), cancel, &error);
+    if (!stream) {
+        g_task_return_error(task, g_steal_pointer(&error));
+        return;
+    }
+    char block[64 * 1024];
+    g_autoptr(GString) contents = g_string_new(NULL);
+    for (;;) {
+        gsize wanted = MIN(sizeof block, EditorFileLimitBytes + 1 - contents->len);
+        gssize count = g_input_stream_read(G_INPUT_STREAM(stream), block, wanted, cancel, &error);
+        if (count < 0) {
+            g_task_return_error(task, g_steal_pointer(&error));
+            return;
+        }
+        if (!count) break;
+        if (contents->len + count > EditorFileLimitBytes) {
+            g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "Script is larger than 8 MiB");
+            return;
+        }
+        g_string_append_len(contents, block, count);
+    }
+    if (!g_utf8_validate(contents->str, contents->len, NULL)) {
+        g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Script must be UTF-8 text");
+        return;
+    }
+    g_task_return_pointer(task, g_string_free_to_bytes(g_steal_pointer(&contents)), (GDestroyNotify)g_bytes_unref);
 }
 
 static void script_loaded(GObject *file, GAsyncResult *result, gpointer user_data)
 {
+    (void)file;
     PendingPage *pending = user_data;
     g_autoptr(GError) error = NULL;
-    g_autofree char *contents = NULL;
-    gsize size = 0;
-    gboolean loaded = g_file_load_partial_contents_finish(G_FILE(file), result, &contents, &size, NULL, &error);
+    g_autoptr(GBytes) bytes = g_task_propagate_pointer(G_TASK(result), &error);
     g_autoptr(GtkNotebook) notebook = g_weak_ref_get(&pending->notebook);
     g_autoptr(GtkWidget) page = g_weak_ref_get(&pending->page);
     Script *script = find_script(notebook, page);
     if (script && !g_cancellable_is_cancelled(script->load)) {
         g_clear_object(&script->load);
-        const char *failure = !loaded ? error->message :
-            size > MaxScriptBytes ? "Script is larger than 8 MiB" :
-            !g_utf8_validate(contents, size, NULL) || memchr(contents, '\0', size)
-                ? "Script must be UTF-8 text" : NULL;
-        GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor));
+        const char *failure = error ? error->message : NULL;
+        GtkTextBuffer *buffer = editor_document(GTK_TEXT_VIEW(script->editor));
         if (failure) {
             g_printerr("Could not open %s: %s\n", script->name, failure);
             if (script->recovery_text) {
@@ -675,7 +774,9 @@ static void script_loaded(GObject *file, GAsyncResult *result, gpointer user_dat
                 gtk_label_set_text(script->message, failure);
             }
         } else {
-            gtk_text_buffer_set_text(buffer, contents, (gint)size);
+            gsize size;
+            const char *contents = g_bytes_get_data(bytes, &size);
+            gtk_text_buffer_set_text(buffer, size ? contents : "", (gint)size);
             gtk_text_buffer_set_modified(buffer, FALSE);
             script->ready = TRUE;
         }
@@ -686,8 +787,7 @@ static void script_loaded(GObject *file, GAsyncResult *result, gpointer user_dat
             gtk_text_buffer_place_cursor(buffer, &cursor);
             gtk_stack_set_visible_child_name(GTK_STACK(page), "editor");
             if (script->restore_cursor > 0)
-                gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(script->editor),
-                    gtk_text_buffer_get_insert(buffer), 0.1, FALSE, 0, 0);
+                editor_reveal_cursor(GTK_TEXT_VIEW(script->editor));
             if (active_script(GTK_WIDGET(notebook)) == script)
                 gtk_widget_grab_focus(script->editor);
         }
@@ -702,10 +802,10 @@ static void load_script(Script *script)
 {
     script->load = g_cancellable_new();
     gtk_label_set_text(script->message, "Opening script…");
-    update_label(gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor)), script->page);
+    update_label(editor_document(GTK_TEXT_VIEW(script->editor)), script->page);
     notify_changed(script->notebook);
-    g_file_load_partial_contents_async(script->file, script->load, read_more_script, script_loaded,
-                                      pending_page_new(script));
+    g_autoptr(GTask) task = g_task_new(script->file, script->load, script_loaded, pending_page_new(script));
+    g_task_run_in_thread(task, read_script);
 }
 
 gboolean tabs_restore_session(GtkWidget *widget, GError **error)
@@ -717,7 +817,7 @@ gboolean tabs_restore_session(GtkWidget *widget, GError **error)
         return TRUE;
     GtkNotebook *notebook = notebook_for(widget);
     Tabs *tabs = g_object_get_data(G_OBJECT(notebook), "tabs");
-    tabs->restoring = TRUE;
+    tabs->updating_pages = TRUE;
     while (gtk_notebook_get_n_pages(notebook)) {
         GtkWidget *page = gtk_notebook_get_nth_page(notebook, 0);
         stop_script(g_object_get_data(G_OBJECT(page), "script"));
@@ -734,19 +834,18 @@ gboolean tabs_restore_session(GtkWidget *widget, GError **error)
             script->recovery_text = g_strdup(tab->text);
             load_script(script);
         } else {
-            GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor));
+            GtkTextBuffer *buffer = editor_document(GTK_TEXT_VIEW(script->editor));
             gtk_text_buffer_set_modified(buffer, tab->modified);
             GtkTextIter cursor;
             gtk_text_buffer_get_iter_at_offset(buffer, &cursor,
                 MIN(tab->cursor, gtk_text_buffer_get_char_count(buffer)));
             gtk_text_buffer_place_cursor(buffer, &cursor);
-            gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(script->editor),
-                gtk_text_buffer_get_insert(buffer), 0.1, FALSE, 0, 0);
+            editor_reveal_cursor(GTK_TEXT_VIEW(script->editor));
             update_label(buffer, script->page);
         }
     }
     gtk_notebook_set_current_page(notebook, session->active_tab);
-    tabs->restoring = FALSE;
+    tabs->updating_pages = FALSE;
     notify_changed(notebook);
     return TRUE;
 }
@@ -775,43 +874,62 @@ void tabs_open(GtkWidget *tabs, GFile *file, const char *display_name)
     load_script(script);
 }
 
-GFile *tabs_rename(GtkWidget *widget, GFile *file, const char *name, GError **error)
+static gboolean at_or_below(GFile *file, GFile *root)
 {
-    if (!*name || g_str_equal(name, ".") || g_str_equal(name, "..") || strchr(name, '/')) {
-        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_FILENAME,
-            "Enter a filename without slashes.");
-        return NULL;
-    }
+    return file && (g_file_equal(file, root) || g_file_has_prefix(file, root));
+}
+
+gboolean tabs_move_file(GtkWidget *widget, GFile *file, GFile *destination, GError **error)
+{
     GtkNotebook *notebook = notebook_for(widget);
     for (int i = 0; i < gtk_notebook_get_n_pages(notebook); ++i) {
         Script *script = find_script(notebook, gtk_notebook_get_nth_page(notebook, i));
-        if (script && ((script->file && g_file_equal(script->file, file)) ||
-                       (script->save_file && g_file_equal(script->save_file, file))) &&
+        if (!script) continue;
+        if (at_or_below(script->file, destination) || at_or_below(script->save_file, destination)) {
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_EXISTS, "Another tab uses that destination.");
+            return FALSE;
+        }
+        if ((at_or_below(script->file, file) || at_or_below(script->save_file, file)) &&
             (script->load || script->save || script->close_prompt)) {
             g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY,
-                "This script is busy. Try again when it finishes.");
-            return NULL;
+                "An affected tab is busy. Try again when it finishes.");
+            return FALSE;
         }
     }
-    GFile *renamed = g_file_set_display_name(file, name, NULL, error);
-    if (!renamed)
-        return NULL;
-    g_autofree char *basename = g_file_get_basename(renamed);
-    g_autofree char *display_name = g_filename_display_name(basename);
-    g_autofree char *path = g_file_get_parse_name(renamed);
+    const char *from = g_file_peek_path(file);
+    const char *to = g_file_peek_path(destination);
+    if (!from || !to) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Choose a local folder.");
+        return FALSE;
+    }
+    if (syscall(SYS_renameat2, AT_FDCWD, from, AT_FDCWD, to, RENAME_NOREPLACE) != 0) {
+        int failure = errno;
+        const char *message = failure == EEXIST ? "That name is already in use in this folder." :
+            failure == EXDEV ? "These folders are on different filesystems." : g_strerror(failure);
+        g_set_error_literal(error, G_IO_ERROR, g_io_error_from_errno(failure), message);
+        return FALSE;
+    }
     for (int i = 0; i < gtk_notebook_get_n_pages(notebook); ++i) {
         GtkWidget *page = gtk_notebook_get_nth_page(notebook, i);
         Script *script = find_script(notebook, page);
-        if (!script || !script->file || !g_file_equal(script->file, file))
+        if (!script || !at_or_below(script->file, file))
             continue;
-        g_set_object(&script->file, renamed);
-        g_free(script->name);
-        script->name = g_strdup(display_name);
+        g_autofree char *relative = g_file_get_relative_path(file, script->file);
+        if (relative) {
+            g_autoptr(GFile) child = g_file_resolve_relative_path(destination, relative);
+            g_set_object(&script->file, child);
+        } else {
+            g_set_object(&script->file, destination);
+            g_autofree char *basename = g_file_get_basename(destination);
+            g_free(script->name);
+            script->name = g_filename_display_name(basename);
+        }
+        g_autofree char *path = g_file_get_parse_name(script->file);
         gtk_widget_set_tooltip_text(script->tab, path);
-        update_label(gtk_text_view_get_buffer(GTK_TEXT_VIEW(script->editor)), page);
+        update_label(editor_document(GTK_TEXT_VIEW(script->editor)), page);
     }
     notify_changed(notebook);
-    return renamed;
+    return TRUE;
 }
 
 static void switched_page(GtkNotebook *notebook, GtkWidget *page, guint index, gpointer user_data)

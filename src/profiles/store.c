@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <glib/gstdio.h>
+#include <json-glib/json-glib.h>
 #include <linux/fs.h>
 #include <string.h>
 #include <sys/file.h>
@@ -25,7 +26,61 @@ gboolean profile_name_valid(const char *name)
 
 static char *profiles_directory(void)
 {
-    return g_build_filename(g_get_home_dir(), ".local", "share", "relapse", "profiles", NULL);
+    return g_build_filename(g_get_user_data_dir(), "relapse", "profiles", NULL);
+}
+
+static char *profile_config_file(const char *name)
+{
+    g_autofree char *directory = g_build_filename(g_get_user_config_dir(), "relapse", "profiles", name, NULL);
+    return g_build_filename(directory, "config.json", NULL);
+}
+
+char *profile_data_directory(const char *name, GError **error)
+{
+    if (!profile_name_valid(name)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid profile name.");
+        return NULL;
+    }
+    g_autofree char *directory = profiles_directory();
+    g_autofree char *fallback = g_build_filename(directory, name, NULL);
+    g_autofree char *path = profile_config_file(name);
+    GStatBuf info;
+    if (g_stat(path, &info) != 0) {
+        if (errno == ENOENT) return g_steal_pointer(&fallback);
+        g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno),
+            "Could not inspect profile configuration: %s", g_strerror(errno));
+        return NULL;
+    }
+    if (!S_ISREG(info.st_mode) || info.st_size > 1024 * 1024) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Invalid profile configuration file.");
+        return NULL;
+    }
+    g_autofree char *contents = NULL;
+    gsize size;
+    if (!g_file_get_contents(path, &contents, &size, error)) return NULL;
+    if (size > 1024 * 1024 || (size && memchr(contents, 0, size))) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Invalid profile configuration file.");
+        return NULL;
+    }
+    g_autoptr(JsonParser) parser = json_parser_new();
+    if (!json_parser_load_from_data(parser, contents, size, error)) return NULL;
+    JsonNode *root = json_parser_get_root(parser);
+    if (!root || !JSON_NODE_HOLDS_OBJECT(root)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Profile configuration must be an object.");
+        return NULL;
+    }
+    JsonNode *data_dir = json_object_get_member(json_node_get_object(root), "dataDir");
+    if (!data_dir) return g_steal_pointer(&fallback);
+    if (!JSON_NODE_HOLDS_VALUE(data_dir) || json_node_get_value_type(data_dir) != G_TYPE_STRING) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Profile dataDir must be a string.");
+        return NULL;
+    }
+    const char *configured = json_node_get_string(data_dir);
+    if (!configured || !*configured || !g_path_is_absolute(configured)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Profile dataDir must be an absolute path.");
+        return NULL;
+    }
+    return g_strdup(configured);
 }
 
 gboolean profile_create(const char *name, GError **error)
@@ -224,19 +279,32 @@ static char **finish_list(GPtrArray *items)
     return (char **)g_ptr_array_free(items, FALSE);
 }
 
-char **profiles_list(void)
+static void collect_profiles(const char *directory, GHashTable *names)
 {
-    g_autofree char *directory = profiles_directory();
     g_autoptr(GDir) dir = g_dir_open(directory, 0, NULL);
-    GPtrArray *items = g_ptr_array_new_with_free_func(g_free);
     const char *name;
     while (dir && (name = g_dir_read_name(dir))) {
-        if (!profile_name_valid(name)) continue;
+        if (!profile_name_valid(name) || g_hash_table_contains(names, name)) continue;
         g_autofree char *path = g_build_filename(directory, name, NULL);
         struct stat info;
         if (g_lstat(path, &info) == 0 && S_ISDIR(info.st_mode))
-            g_ptr_array_add(items, g_strdup(name));
+            g_hash_table_add(names, g_strdup(name));
     }
+}
+
+char **profiles_list(void)
+{
+    g_autoptr(GHashTable) names = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    g_autofree char *configured = g_build_filename(g_get_user_config_dir(), "relapse", "profiles", NULL);
+    g_autofree char *legacy = profiles_directory();
+    collect_profiles(configured, names);
+    collect_profiles(legacy, names);
+    GPtrArray *items = g_ptr_array_new_with_free_func(g_free);
+    GHashTableIter iter;
+    gpointer name;
+    g_hash_table_iter_init(&iter, names);
+    while (g_hash_table_iter_next(&iter, &name, NULL))
+        g_ptr_array_add(items, g_strdup(name));
     return finish_list(items);
 }
 
@@ -283,9 +351,9 @@ char **profile_sockets_list(const char *directory)
 
 gboolean profile_is_running(const char *name)
 {
-    if (!profile_name_valid(name)) return FALSE;
-    g_autofree char *directory = profiles_directory();
-    g_autofree char *path = g_build_filename(directory, name, ".lock", NULL);
+    g_autofree char *directory = profile_data_directory(name, NULL);
+    if (!directory) return FALSE;
+    g_autofree char *path = g_build_filename(directory, ".lock", NULL);
     int fd = g_open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
     if (fd < 0) return FALSE;
     /* Status readers may overlap; only an exclusive launcher/maintenance lock

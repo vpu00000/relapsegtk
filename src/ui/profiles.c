@@ -13,6 +13,7 @@ typedef struct {
     char **chosen;
     gboolean updating;
     gboolean initialized;
+    gint64 next_identity_check;
     SocketSelectedFunc selected;
     gpointer user_data;
 } SocketPicker;
@@ -247,25 +248,34 @@ GtkWidget *socket_picker_new(SocketSelectedFunc selected, gpointer user_data)
 void socket_picker_update(GtkWidget *picker, const char *const *paths)
 {
     SocketPicker *state = g_object_get_data(G_OBJECT(picker), "socket-picker");
-    state->updating = TRUE;
     guint count = g_list_model_get_n_items(G_LIST_MODEL(state->model));
     gboolean paths_changed = count != g_strv_length((char **)paths);
     for (guint i = 0; i < count && !paths_changed; ++i) {
         g_autoptr(GtkStringObject) item = g_list_model_get_item(G_LIST_MODEL(state->model), i);
         paths_changed = g_strcmp0(gtk_string_object_get_string(item), paths[i]) != 0;
     }
+    gint64 now = g_get_monotonic_time();
+    if (!paths_changed && (!count || now < state->next_identity_check)) return;
+    state->next_identity_check = now + 5 * G_TIME_SPAN_SECOND;
+    state->updating = TRUE;
     if (paths_changed) {
         g_autoptr(GPtrArray) entries = g_ptr_array_new_with_free_func(g_object_unref);
         for (guint i = 0; paths[i]; ++i) g_ptr_array_add(entries, socket_item_new(paths[i]));
         g_list_store_splice(state->model, 0, count, entries->pdata, entries->len);
     } else {
+        gboolean identities_changed = FALSE;
         for (guint i = 0; paths[i]; ++i) {
             g_autoptr(GtkStringObject) old = g_list_model_get_item(G_LIST_MODEL(state->model), i);
             g_autoptr(GtkStringObject) updated = socket_item_new(paths[i]);
             if (!identity_equal(old, updated)) {
                 gpointer replacement[] = {updated};
                 g_list_store_splice(state->model, i, 1, replacement, 1);
+                identities_changed = TRUE;
             }
+        }
+        if (!identities_changed) {
+            state->updating = FALSE;
+            return;
         }
     }
     g_autoptr(GtkBitset) selected = gtk_bitset_new_empty();

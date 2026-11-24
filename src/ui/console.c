@@ -6,6 +6,7 @@ typedef struct {
     GtkEntry *entry;
     GQueue inputs;
     ConsoleInputFunc input;
+    ConsoleCloseFunc closed;
     gpointer user_data;
 } Console;
 
@@ -50,6 +51,7 @@ static gboolean close_requested(GtkWindow *window, gpointer user_data)
     Console *console = user_data;
     cancel_inputs(console);
     gtk_widget_set_visible(GTK_WIDGET(window), FALSE);
+    if (console->closed) console->closed(console->user_data);
     return TRUE;
 }
 
@@ -119,10 +121,11 @@ void console_window_request_input(GtkWindow *window, gint64 id)
     console_window_show(window, TRUE);
 }
 
-GtkWindow *console_window_new(GtkWindow *parent, ConsoleInputFunc input, gpointer user_data)
+GtkWindow *console_window_new(GtkWindow *parent, ConsoleInputFunc input, ConsoleCloseFunc closed, gpointer user_data)
 {
     Console *console = g_new0(Console, 1);
     console->input = input;
+    console->closed = closed;
     console->user_data = user_data;
     GtkWindow *window = GTK_WINDOW(gtk_window_new());
     gtk_widget_set_visible(GTK_WIDGET(window), FALSE);

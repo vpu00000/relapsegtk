@@ -1,16 +1,18 @@
 .relapse-ui,
 .relapse-ui * {
     all: unset;
-    --relapse-background: #1c1d20;
-    --relapse-editor: #131417;
-    --relapse-control: #303238;
-    --relapse-hover: #3d4048;
-    --relapse-pressed: #25272c;
-    --relapse-border: #42454e;
-    --relapse-text: #e7e8ec;
-    --relapse-muted: #a4a7b0;
-    --relapse-focus: #c1c6d2;
-    --relapse-selection: #484d5b;
+    --relapse-background: #222222;
+    --relapse-editor: #161616;
+    --relapse-control: #303030;
+    --relapse-hover: #393939;
+    --relapse-pressed: #262626;
+    --relapse-border: #3e3e3e;
+    --relapse-text: #eeeeee;
+    --relapse-muted: #aaaaaa;
+    --relapse-focus: #d4d4d4;
+    --relapse-selection: #383838;
+    --workspace-surface: #1b1b1b;
+    --workspace-rule: #333333;
     font-family: "DejaVu Sans", sans-serif;
     font-size: 13px;
     color: var(--relapse-text);
@@ -45,37 +47,15 @@ window.relapse-ui.fullscreen {
     margin: 0 8px;
 }
 
-@keyframes relapse-logo-pulse {
-    0%   { filter: drop-shadow(0 0 2px rgba(193, 198, 210, 0.20)); }
-    50%  { filter: drop-shadow(0 0 5px rgba(193, 198, 210, 0.35)); }
-    100% { filter: drop-shadow(0 0 2px rgba(193, 198, 210, 0.20)); }
+.relapse-ui headerbar.app-titlebar {
+    min-height: 36px;
+    padding: 0 6px;
+    border-bottom-width: 0;
 }
 
-.relapse-ui image.app-logo {
-    -gtk-icon-size: 22px;
-    color: var(--relapse-text);
-    animation: relapse-logo-pulse 5s ease-in-out infinite;
-}
-
-.relapse-ui .titlebar-wrap {
-    background-color: var(--relapse-background);
-    border-radius: 6px 6px 0 0;
-}
-
-window.relapse-ui.maximized .titlebar-wrap,
-window.relapse-ui.fullscreen .titlebar-wrap {
-    border-radius: 0;
-}
-
-.relapse-ui .titlebar-wrap headerbar {
-    border-bottom: 0;
-    border-radius: 6px 6px 0 0;
-}
-
-.relapse-ui .shader-strip {
-    min-height: 4px;
-    margin: 0;
-    padding: 0;
+.relapse-ui .app-wordmark {
+    font-size: 14px;
+    font-weight: 600;
 }
 
 window.relapse-ui.maximized headerbar,
@@ -109,18 +89,51 @@ window.relapse-ui.fullscreen headerbar {
     background-color: var(--relapse-pressed);
 }
 
+.relapse-ui .editor-toolbar {
+    padding: 3px 8px;
+    border-top: 1px solid var(--workspace-rule);
+    background: var(--workspace-surface);
+}
+
+.relapse-ui .editor-toolbar button label,
+.relapse-ui .editor-toolbar .status-label {
+    font-size: 12px;
+}
+
+.relapse-ui .editor-toolbar button.editor-tool {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
+.relapse-ui .editor-toolbar button.editor-tool:hover {
+    background: var(--relapse-hover);
+}
+
+.relapse-ui .editor-toolbar button.editor-tool:checked {
+    background: var(--relapse-selection);
+    box-shadow: inset 0 -2px var(--relapse-focus);
+}
+
+.relapse-ui .editor-toolbar button.execute-script-button {
+    min-height: 26px;
+    padding: 0 9px;
+}
+
 .relapse-ui .editor-toolbar button:disabled image {
     opacity: 0.45;
 }
 
 .relapse-ui .execute-script-button:disabled {
-    color: #737781;
-    background-color: #24262a;
-    border-color: #35383e;
+    color: #858585;
+    background-color: var(--relapse-pressed);
+    border-color: #353535;
 }
 
 .relapse-ui .execute-script-button:disabled label {
-    color: #737781;
+    color: #858585;
 }
 
 .relapse-ui .connection-status .status-label {
@@ -235,12 +248,7 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui scrolledwindow.editor {
-    border: 1px solid var(--relapse-border);
     background-color: var(--relapse-editor);
-}
-
-.relapse-ui scrolledwindow.editor:focus-within {
-    border-color: var(--relapse-focus);
 }
 
 .relapse-ui textview,
@@ -263,36 +271,41 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui .editor-search {
-    padding: 4px 6px;
-    border: 1px solid var(--relapse-border);
-    border-bottom: 0;
-    background-color: var(--relapse-background);
+    padding: 2px 6px;
+    border-top: 1px solid var(--workspace-rule);
+    background-color: var(--workspace-surface);
 }
 
-.relapse-ui .editor-search searchentry {
-    min-height: 26px;
+.relapse-ui .editor-search entry {
+    min-width: 10em;
+    min-height: 22px;
     padding: 0 6px;
     border: 1px solid var(--relapse-border);
     border-radius: 3px;
     background-color: var(--relapse-editor);
 }
 
-.relapse-ui .editor-search searchentry:focus-within {
+.relapse-ui .editor-search entry:focus-within {
     border-color: var(--relapse-focus);
 }
 
-.relapse-ui .editor-search searchentry.no-matches {
+.relapse-ui .editor-search entry.no-matches {
     border-color: #ef9393;
 }
 
-.relapse-ui .editor-search searchentry selection {
+.relapse-ui .editor-search entry selection {
     background-color: var(--relapse-selection);
     color: var(--relapse-text);
 }
 
-.relapse-ui .editor-search searchentry image {
-    margin: 0 4px;
+.relapse-ui .editor-search entry image {
+    -gtk-icon-size: 12px;
     color: var(--relapse-muted);
+}
+
+.relapse-ui .editor-search text,
+.relapse-ui .editor-search button label {
+    font-size: 12px;
 }
 
 .relapse-ui .editor-search .search-count {
@@ -301,14 +314,23 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui .editor-search button {
-    min-width: 26px;
-    min-height: 26px;
-    padding: 0 2px;
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
+.relapse-ui .editor-search button:hover:not(:disabled) {
+    background-color: var(--relapse-hover);
 }
 
 .relapse-ui .editor-search button:checked {
     background-color: var(--relapse-selection);
-    border-color: var(--relapse-focus);
+}
+
+.relapse-ui .editor-search .replace-row button {
+    padding: 0 6px;
 }
 
 .relapse-ui scrollbar {
@@ -343,15 +365,14 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui .navigation-rail {
-    min-width: 46px;
-    padding: 4px 0;
+    min-width: 42px;
     background-color: var(--relapse-editor);
     border-right: 1px solid var(--relapse-border);
 }
 
 .relapse-ui button.navigation-button {
-    min-width: 42px;
-    min-height: 44px;
+    min-width: 38px;
+    min-height: 33px;
     padding: 0;
     border: 0;
     border-left: 2px solid transparent;
@@ -391,15 +412,40 @@ window.relapse-ui.fullscreen headerbar {
     font-weight: 600;
 }
 
-.relapse-ui label.settings-group-title {
-    font-weight: 600;
-    color: var(--relapse-muted);
-}
-
 .relapse-ui .settings-group {
     border: 1px solid var(--relapse-border);
     border-radius: 5px;
     background-color: var(--relapse-editor);
+}
+
+.relapse-ui .settings-group.preferences-grid {
+    border: 0;
+    background: transparent;
+}
+
+.relapse-ui .preferences-grid > label {
+    min-height: 28px;
+}
+
+.relapse-ui label.preferences-section {
+    min-width: 88px;
+    color: var(--relapse-muted);
+    font-weight: 600;
+    font-size: 12px;
+}
+
+.relapse-ui .preferences-grid separator {
+    min-height: 1px;
+    margin: 5px 0;
+    background: var(--relapse-border);
+}
+
+.relapse-ui .preferences-grid button.preference-path {
+    padding: 0 8px;
+}
+
+.relapse-ui .preference-path image {
+    opacity: 0.65;
 }
 
 .relapse-ui .settings-row {
@@ -498,6 +544,106 @@ window.relapse-ui.fullscreen headerbar {
     border-color: var(--relapse-focus);
 }
 
+.relapse-ui.configuration-dialog .account-dialog {
+    padding: 10px 14px 12px;
+}
+
+.relapse-ui.configuration-dialog headerbar {
+    min-height: 30px;
+}
+
+.relapse-ui .settings-group.configuration-list {
+    border: 0;
+    border-radius: 0;
+    background-color: transparent;
+}
+
+.relapse-ui .configuration-list .settings-row {
+    min-height: 28px;
+    padding: 3px 0;
+    border: 0;
+}
+
+.relapse-ui .configuration-list label.settings-label {
+    font-weight: 400;
+}
+
+.relapse-ui .configuration-list button,
+.relapse-ui .configuration-list entry {
+    min-height: 26px;
+    padding: 0 8px;
+}
+
+.relapse-ui button.configuration-path {
+    background-color: var(--relapse-editor);
+}
+
+.relapse-ui button.configuration-path:hover:not(:disabled) {
+    background-color: var(--relapse-control);
+}
+
+.relapse-ui .configuration-list button:disabled label {
+    color: var(--relapse-muted);
+}
+
+.relapse-ui .configuration-list checkbutton label {
+    margin-left: 6px;
+}
+
+.relapse-ui .configuration-list checkbutton:disabled {
+    opacity: 0.5;
+}
+
+.relapse-ui label.configuration-section {
+    padding-top: 8px;
+    border-top: 1px solid alpha(var(--relapse-border), 0.6);
+    color: var(--relapse-muted);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.relapse-ui .configuration-menu > button {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+    border-color: transparent;
+    background-color: transparent;
+}
+
+.relapse-ui .configuration-actions {
+    padding-top: 4px;
+}
+
+.relapse-ui .configuration-actions button {
+    min-height: 26px;
+    min-width: 48px;
+    padding: 0 10px;
+}
+
+.relapse-ui button.configuration-save {
+    border-color: var(--relapse-muted);
+}
+
+.relapse-ui .configuration-list checkbutton check {
+    min-width: 12px;
+    min-height: 12px;
+    border: 1px solid var(--relapse-border);
+    border-radius: 2px;
+    background-color: var(--relapse-editor);
+    -gtk-icon-size: 12px;
+}
+
+.relapse-ui .configuration-list checkbutton check:checked {
+    -gtk-icon-source: -gtk-icontheme("object-select-symbolic");
+    background-color: var(--relapse-selection);
+    border-color: var(--relapse-muted);
+}
+
+.relapse-ui .configuration-list checkbutton:focus-visible check {
+    outline: 1px solid var(--relapse-focus);
+    outline-offset: 2px;
+}
+
 .relapse-ui .indent-options button {
     min-width: 36px;
     min-height: 28px;
@@ -522,90 +668,61 @@ window.relapse-ui.fullscreen headerbar {
     box-shadow: inset 0 -2px var(--relapse-focus);
 }
 
-.relapse-ui .accounts-page {
-    padding: 10px 12px;
+.relapse-ui .accounts-page { background: #1c1c1c; }
+.relapse-ui .profile-roster { padding: 2px 14px 0; }
+.relapse-ui .roster-heading { min-height: 32px; margin-bottom: 3px; }
+.relapse-ui .accounts-title { font-size: 15px; font-weight: 600; }
+.relapse-ui .roster-heading > button, .relapse-ui .roster-heading > menubutton { margin: 3px 0; }
+.relapse-ui .roster-heading button { min-height: 24px; min-width: 24px; padding: 0 6px; }
+.relapse-ui .roster-heading button label { font-size: 12px; }
+.relapse-ui .roster-heading .filter-menu > button, .relapse-ui .roster-heading button.roster-refresh {
+    background: transparent; border-color: transparent;
 }
-
-.relapse-ui .accounts-title {
-    font-size: 15px;
-    font-weight: 600;
+.relapse-ui .roster-heading button.roster-refresh { padding: 0; -gtk-icon-size: 13px; }
+.relapse-ui .roster-columns { min-height: 23px; padding: 0 8px; border-bottom: 1px solid #454545; }
+.relapse-ui .roster-columns label { font-size: 11px; font-weight: 600; color: #a8a8a8; }
+.relapse-ui .accounts-list { background: transparent; }
+.relapse-ui .account-row { min-height: 29px; padding: 0 8px; border-bottom: 1px solid #2c2c2c; }
+.relapse-ui .account-row:hover { background: #232323; }
+.relapse-ui .account-row:selected { background: #2e2e2e; box-shadow: inset 2px 0 #bcbcbc; }
+.relapse-ui .account-row:focus-visible { outline: 1px solid var(--relapse-focus); outline-offset: -1px; }
+.relapse-ui .account-row .account-name { font-size: 12px; font-weight: 600; }
+.relapse-ui .account-row .account-detail { font-size: 12px; color: #b3b3b3; }
+.relapse-ui .session-label { font-size: 12px; color: #929292; }
+.relapse-ui .running .session-label { color: #ddd; }
+.relapse-ui .roster-initial {
+    min-width: 20px; min-height: 20px; background: #333; border-radius: 5px;
+    font-size: 11px; font-weight: 600; color: #ccc;
 }
-
-.relapse-ui entry.accounts-search,
-.relapse-ui entry.accounts-join-entry {
-    min-height: 24px;
-    padding: 0 6px;
-    background-color: var(--relapse-editor);
-    border: 1px solid var(--relapse-border);
-    border-radius: 3px;
+.relapse-ui .roster-dot { color: #b2c59f; font-size: 8px; }
+.relapse-ui .row-message { font-size: 11px; color: #aaa; }
+.relapse-ui .profile-actions-menu > button { background: transparent; min-width: 24px; min-height: 24px; border: 0; padding: 0; -gtk-icon-size: 13px; }
+.relapse-ui .profile-actions-menu > button:hover, .relapse-ui .filter-menu > button:hover,
+.relapse-ui button.roster-refresh:hover { background: var(--relapse-hover); }
+.relapse-ui .roster-empty { color: var(--relapse-muted); padding: 24px 0; }
+.relapse-ui .create-profile > button { border-radius: 3px 0 0 3px; }
+.relapse-ui .create-profile > menubutton > button { border-left: 0; border-radius: 0 3px 3px 0; min-width: 19px; padding: 0 2px; }
+.relapse-ui .create-profile image { -gtk-icon-size: 12px; }
+.relapse-ui .shared-target {
+    min-height: 34px; padding: 0 8px; margin-bottom: 4px;
+    background: #212121; border: 1px solid #3a3a3a; border-radius: 4px;
 }
-
-.relapse-ui entry.accounts-search:focus-within,
-.relapse-ui entry.accounts-join-entry:focus-within {
-    border-color: var(--relapse-focus);
+.relapse-ui .shared-target separator { min-height: 18px; min-width: 1px; background: #3b3b3b; }
+.relapse-ui .target-heading, .relapse-ui .target-name { font-size: 12px; font-weight: 600; }
+.relapse-ui .target-game { font-size: 12px; color: #c6c6c6; }
+.relapse-ui entry.target-entry, .relapse-ui entry.accounts-search {
+    min-height: 24px; padding: 0 7px; background: #191919; border: 1px solid #464646; border-radius: 3px;
 }
-
-.relapse-ui entry.accounts-search text,
-.relapse-ui entry.accounts-search label,
-.relapse-ui entry.accounts-join-entry text,
-.relapse-ui entry.accounts-join-entry label {
-    font-size: 12px;
+.relapse-ui entry.target-entry text, .relapse-ui entry.target-entry placeholder { font-size: 12px; }
+.relapse-ui entry.target-entry:focus-within, .relapse-ui entry.accounts-search:focus-within { border-color: #b6b6b6; }
+.relapse-ui .target-error { color: #e4a9a4; font-size: 12px; margin-bottom: 6px; }
+.relapse-ui button.launch-one, .relapse-ui button.detach-target, .relapse-ui button.clear-selection {
+    background: transparent; border: 0; padding: 0 5px; min-height: 24px; min-width: 23px; -gtk-icon-size: 13px;
 }
-
-.relapse-ui entry.accounts-search selection,
-.relapse-ui entry.accounts-join-entry selection {
-    background-color: var(--relapse-selection);
-}
-
-.relapse-ui entry.accounts-search image {
-    -gtk-icon-size: 12px;
-    color: var(--relapse-muted);
-    margin: 0 4px;
-}
-
-.relapse-ui .accounts-filter > button {
-    min-height: 24px;
-    padding: 0 7px;
-    background-color: transparent;
-    border-color: transparent;
-}
-
-.relapse-ui .accounts-filter label {
-    font-size: 12px;
-}
-
-.relapse-ui .accounts-list {
-    background-color: var(--relapse-editor);
-    border: 1px solid var(--relapse-border);
-    border-radius: 4px;
-}
-
-.relapse-ui .account-row {
-    padding: 5px 8px;
-    border-bottom: 1px solid alpha(var(--relapse-border), 0.5);
-}
-
-.relapse-ui .account-row:last-child {
-    border-bottom: 0;
-}
-
-.relapse-ui .account-row.running {
-    box-shadow: inset 2px 0 #adcc92;
-}
-
-.relapse-ui .account-row:hover {
-    background-color: alpha(var(--relapse-selection), 0.18);
-}
-
-.relapse-ui .account-row:selected {
-    background-color: alpha(var(--relapse-selection), 0.5);
-}
-
-.relapse-ui .account-row:focus-visible {
-    outline: 1px solid var(--relapse-focus);
-    outline-offset: -2px;
-}
-
+.relapse-ui button.launch-one label { font-size: 12px; }
+.relapse-ui button.launch-one:hover, .relapse-ui button.detach-target:hover, .relapse-ui button.clear-selection:hover { background: var(--relapse-hover); }
+.relapse-ui button.batch-launch { background: #d6d6d6; border-color: #d6d6d6; }
+.relapse-ui button.batch-launch label, .relapse-ui button.batch-launch image { color: #202020; }
 .relapse-ui .account-select check {
     min-width: 12px;
     min-height: 12px;
@@ -641,69 +758,6 @@ window.relapse-ui.fullscreen headerbar {
 
 .relapse-ui .account-avatar {
     border-radius: 4px;
-}
-
-.relapse-ui .account-settings > button {
-    min-width: 24px;
-    min-height: 24px;
-    padding: 0;
-    border-color: transparent;
-    background-color: transparent;
-}
-
-.relapse-ui .account-settings > button image {
-    opacity: 0.65;
-}
-
-.relapse-ui .account-settings > button:hover image {
-    opacity: 1;
-}
-
-.relapse-ui .accounts-actions {
-    padding-top: 8px;
-    border-top: 1px solid var(--relapse-border);
-}
-
-.relapse-ui button.accounts-launch {
-    min-width: 76px;
-    min-height: 24px;
-    padding: 0 8px;
-}
-
-.relapse-ui button.accounts-launch label {
-    font-size: 12px;
-}
-
-.relapse-ui button.accounts-clear-selection {
-    min-width: 20px;
-    min-height: 24px;
-    padding: 0;
-    background-color: transparent;
-    border-color: transparent;
-    -gtk-icon-size: 12px;
-}
-
-.relapse-ui .account-running {
-    font-size: 11px;
-    color: #adcc92;
-    margin-right: 4px;
-}
-
-.relapse-ui button.accounts-refresh,
-.relapse-ui .accounts-add > button {
-    min-height: 24px;
-    min-width: 24px;
-    padding: 0 7px;
-}
-
-.relapse-ui button.accounts-refresh {
-    background-color: transparent;
-    border-color: transparent;
-}
-
-.relapse-ui button.accounts-refresh label,
-.relapse-ui .accounts-add > button label {
-    font-size: 12px;
 }
 
 .relapse-ui popover.account-menu contents {
@@ -755,13 +809,46 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui .scripts-sidebar {
-    padding: 12px 8px;
-    background-color: var(--relapse-background);
+    background-color: var(--workspace-surface);
 }
 
-.relapse-ui .scripts-title {
+.relapse-ui .scripts-heading,
+.relapse-ui .script-tab-header {
+    min-height: 32px;
+    border-bottom: 1px solid var(--workspace-rule);
+    background: var(--workspace-surface);
+}
+
+.relapse-ui .scripts-heading {
+    padding: 0 4px 0 12px;
+}
+
+.relapse-ui .scripts-heading label {
     font-weight: 600;
-    padding: 0 6px;
+    font-size: 12px;
+}
+
+.relapse-ui .scripts-heading button {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+    border: 0;
+    margin: 3px 0;
+    background: transparent;
+}
+
+.relapse-ui .scripts-heading button:hover {
+    background: var(--relapse-hover);
+}
+
+/* Keep the full drag target while drawing only a hairline. */
+.relapse-ui .scripts-split.horizontal > separator {
+    background: linear-gradient(to right, var(--workspace-surface) 2px, var(--workspace-rule) 2px,
+                                var(--workspace-rule) 3px, var(--relapse-editor) 3px);
+}
+
+.relapse-ui .scripts-split.horizontal > separator:hover {
+    background: var(--relapse-border);
 }
 
 .relapse-ui label.scripts-empty {
@@ -770,33 +857,79 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui list.scripts-list {
+    padding: 4px 4px 4px 6px;
     background-color: transparent;
 }
 
 .relapse-ui list.scripts-list row.script-row {
-    min-height: 28px;
-    padding: 2px 8px;
+    min-height: 25px;
+    padding: 0 4px;
     border-radius: 3px;
     background-color: transparent;
     border: 0;
 }
 
-.relapse-ui list.scripts-list row.script-row image {
-    opacity: 0.72;
+.relapse-ui .script-filename {
+    font-size: 12px;
+    color: #c5c5c5;
 }
 
-.relapse-ui list.scripts-list row.script-row:selected {
+.relapse-ui .script-directory .script-filename {
+    font-weight: 500;
+}
+
+.relapse-ui .script-directory .script-filename,
+.relapse-ui .current-script .script-filename {
+    color: var(--relapse-text);
+}
+
+.relapse-ui .scripts-list treeexpander indent {
+    min-width: 12px;
+}
+
+.relapse-ui .scripts-list treeexpander expander {
+    min-width: 12px;
+    min-height: 12px;
+    margin-right: 2px;
+    -gtk-icon-size: 10px;
+    -gtk-icon-source: -gtk-icontheme("pan-end-symbolic");
+    color: var(--relapse-muted);
+}
+
+.relapse-ui .scripts-list treeexpander expander:checked {
+    -gtk-icon-source: -gtk-icontheme("pan-down-symbolic");
+}
+
+.relapse-ui list.scripts-list row.script-row:hover .script-filename {
+    color: var(--relapse-text);
+}
+
+.relapse-ui list.scripts-list row.script-row.current-script {
     background-color: var(--relapse-selection);
     box-shadow: inset 2px 0 var(--relapse-focus);
-}
-
-.relapse-ui list.scripts-list row.script-row:selected image {
-    opacity: 1;
 }
 
 .relapse-ui list.scripts-list row.script-row:focus-visible {
     outline: 1px solid var(--relapse-focus);
     outline-offset: -1px;
+}
+
+.relapse-ui .script-row.dragging .script-filename {
+    opacity: 0.5;
+}
+
+.relapse-ui list.scripts-list row.script-row.drop-folder,
+.relapse-ui .scripts-heading.drop-folder {
+    background: var(--relapse-selection);
+    box-shadow: inset 0 0 0 1px var(--relapse-muted);
+}
+
+.relapse-ui label.script-drag-label {
+    padding: 3px 8px;
+    border: 1px solid var(--relapse-muted);
+    border-radius: 3px;
+    background: var(--relapse-control);
+    font-size: 12px;
 }
 
 .relapse-ui entry.script-rename {
@@ -842,20 +975,12 @@ window.relapse-ui.fullscreen headerbar {
     font-weight: normal;
 }
 
-.relapse-ui .script-tab-header {
-    background-color: var(--relapse-background);
-    border: 1px solid var(--relapse-border);
-    border-bottom-width: 0;
-}
-
 .relapse-ui .script-tab {
-    min-height: 34px;
-    padding: 0 8px 0 0;
-    border-top: 2px solid transparent;
-    border-right: 1px solid var(--relapse-border);
+    border-right: 1px solid #292929;
 }
 
 .relapse-ui .script-tab label {
+    font-size: 12px;
     color: var(--relapse-muted);
 }
 
@@ -864,8 +989,8 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui .script-tab.active {
-    border-top-color: var(--relapse-focus);
-    background-color: var(--relapse-editor);
+    box-shadow: inset 0 -2px var(--relapse-focus);
+    background-color: var(--relapse-selection);
 }
 
 .relapse-ui .script-tab.active label {
@@ -887,10 +1012,29 @@ window.relapse-ui.fullscreen headerbar {
     background-color: transparent;
 }
 
-.relapse-ui button.tab-add {
-    margin: 5px;
+.relapse-ui .script-tab-header button.tab-close,
+.relapse-ui .script-tab-header button.tab-add {
+    min-width: 22px;
+    min-height: 22px;
+    margin: 1px;
+    border: 0;
 }
 
+.relapse-ui .script-tab button.tab-close {
+    background-color: var(--relapse-control);
+    opacity: 0;
+}
+
+.relapse-ui .script-tab:hover button.tab-close,
+.relapse-ui .script-tab:focus-within button.tab-close {
+    opacity: 1;
+}
+
+.relapse-ui .script-tab.active button.tab-close {
+    background-color: var(--relapse-selection);
+}
+
+.relapse-ui .script-tab button.tab-close:hover,
 .relapse-ui button.tab-close:hover,
 .relapse-ui button.tab-add:hover {
     background-color: var(--relapse-hover);
@@ -900,7 +1044,6 @@ window.relapse-ui.fullscreen headerbar {
     padding: 20px;
     color: var(--relapse-muted);
     background-color: var(--relapse-editor);
-    border: 1px solid var(--relapse-border);
 }
 
 .relapse-ui popover contents {
@@ -934,39 +1077,47 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui .editor-output-split > separator {
-    min-height: 7px;
-    background: #1d1f22;
+    min-height: 5px;
+    background: linear-gradient(to bottom, var(--relapse-editor) 2px, var(--workspace-rule) 2px,
+                                var(--workspace-rule) 3px, var(--workspace-surface) 3px);
 }
 
 .relapse-ui .editor-output-split > separator:hover {
-    background: #42464f;
+    background: var(--relapse-border);
 }
 
 .relapse-ui .output-pane {
-    border: 1px solid #42464f;
-    background: #121416;
+    background: var(--relapse-editor);
 }
 
 .relapse-ui .output-header {
-    padding: 4px 8px;
-    background: #1d1f22;
-    border-bottom: 1px solid #34373d;
+    min-height: 32px;
+    padding: 0 8px;
+    background: var(--workspace-surface);
+    border-bottom: 1px solid var(--workspace-rule);
 }
 
 .relapse-ui .output-title {
-    font-weight: bold;
+    font-size: 12px;
+    font-weight: 600;
 }
 
 .relapse-ui .output-status {
-    color: #969ba5;
+    color: var(--relapse-muted);
     font-size: 11px;
 }
 
-.relapse-ui .output-clear,
-.relapse-ui .output-copy {
-    padding: 2px 7px;
-    min-height: 20px;
-    font-size: 11px;
+.relapse-ui .output-header button.output-clear,
+.relapse-ui .output-header button.output-copy {
+    padding: 0 6px;
+    margin: 3px 0;
+    min-height: 24px;
+    border: 0;
+    background: transparent;
+}
+
+.relapse-ui .output-header button:hover {
+    background: var(--relapse-hover);
 }
 
 .relapse-ui .output-text,
@@ -978,13 +1129,15 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui .output-text .output-timestamps {
-    color: #737985;
-    border-right: 1px solid #2c3036;
+    color: #888888;
+    border-right: 1px solid #303030;
 }
 
 /* Headers share wheel and trackpad scrolling without changing selection. */
 .relapse-ui .tab-select {
-    padding: 0 8px 0 12px;
+    min-height: 26px;
+    min-width: 24px;
+    padding: 0 9px;
     border: 0;
     border-radius: 0;
     background: transparent;
@@ -992,7 +1145,7 @@ window.relapse-ui.fullscreen headerbar {
 }
 
 .relapse-ui .output-tab {
-    border-right: 1px solid #34373d;
+    border-right: 1px solid #343434;
 }
 
 .relapse-ui .output-source {

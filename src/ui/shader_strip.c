@@ -1,162 +1,95 @@
 #include "shader_strip.h"
 
-#include <epoxy/gl.h>
-
 #define SHADER_STRIP_TYPE (shader_strip_get_type())
-G_DECLARE_FINAL_TYPE(ShaderStrip, shader_strip, RELAPSE, SHADER_STRIP, GtkGLArea)
+G_DECLARE_FINAL_TYPE(ShaderStrip, shader_strip, RELAPSE, SHADER_STRIP, GtkWidget)
 
 struct _ShaderStrip {
-    GtkGLArea parent_instance;
-    GLuint program;
-    GLuint vao;
-    GLuint vbo;
-    GLint u_time;
-    GLint u_res;
-    GTimer *timer;
-    guint tick_id;
+    GtkWidget parent_instance;
+    guint timer;
+    float phase;
 };
 
-G_DEFINE_FINAL_TYPE(ShaderStrip, shader_strip, GTK_TYPE_GL_AREA)
+G_DEFINE_FINAL_TYPE(ShaderStrip, shader_strip, GTK_TYPE_WIDGET)
 
-static const char *VS_SRC =
-    "#version 300 es\n"
-    "layout(location=0) in vec2 pos;\n"
-    "out vec2 uv;\n"
-    "void main(){ uv = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0.0, 1.0); }\n";
-
-static const char *FS_SRC =
-    "#version 300 es\n"
-    "precision mediump float;\n"
-    "in vec2 uv;\n"
-    "out vec4 frag;\n"
-    "uniform float u_time;\n"
-    "uniform vec2 u_res;\n"
-    "void main(){\n"
-    "    float t = u_time;\n"
-    "    float x = uv.x;\n"
-    "    float sweep = 0.5 + 0.5 * sin(x * 4.5 - t * 0.6);\n"
-    "    vec3 base   = vec3(0.36, 0.39, 0.47);\n"
-    "    vec3 accent = vec3(0.68, 0.72, 0.82);\n"
-    "    vec3 col = mix(base, accent, sweep);\n"
-    "    float glint = smoothstep(0.85, 1.0, sweep);\n"
-    "    col += glint * vec3(0.10, 0.10, 0.12);\n"
-    "    float y = uv.y;\n"
-    "    float band = smoothstep(0.0, 0.30, y) * smoothstep(1.0, 0.70, y);\n"
-    "    float alpha = 0.55 + 0.35 * band;\n"
-    "    frag = vec4(col * alpha, alpha);\n"
-    "}\n";
-
-static GLuint compile(GLenum kind, const char *src)
+static gboolean advance(gpointer data)
 {
-    GLuint s = glCreateShader(kind);
-    glShaderSource(s, 1, &src, NULL);
-    glCompileShader(s);
-    GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetShaderInfoLog(s, sizeof log, NULL, log);
-        g_warning("shader compile: %s", log);
-        glDeleteShader(s);
-        return 0;
-    }
-    return s;
-}
-
-static gboolean on_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data)
-{
-    (void)clock;
-    (void)data;
-    gtk_widget_queue_draw(widget);
+    ShaderStrip *strip = data;
+    /* Reduce the integer clock before converting to a render coordinate. */
+    const gint64 period_us = 10472000;
+    strip->phase = (float)(g_get_monotonic_time() % period_us) / period_us;
+    gtk_widget_queue_draw(GTK_WIDGET(strip));
     return G_SOURCE_CONTINUE;
 }
 
-static void on_realize(GtkGLArea *area)
+static void sync_animation(ShaderStrip *strip)
 {
-    gtk_gl_area_make_current(area);
-    if (gtk_gl_area_get_error(area) != NULL) return;
-
-    ShaderStrip *self = RELAPSE_SHADER_STRIP(area);
-
-    GLuint vs = compile(GL_VERTEX_SHADER, VS_SRC);
-    GLuint fs = compile(GL_FRAGMENT_SHADER, FS_SRC);
-    self->program = glCreateProgram();
-    glAttachShader(self->program, vs);
-    glAttachShader(self->program, fs);
-    glLinkProgram(self->program);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    self->u_time = glGetUniformLocation(self->program, "u_time");
-    self->u_res  = glGetUniformLocation(self->program, "u_res");
-
-    static const float verts[] = { -1,-1,  3,-1,  -1, 3 };
-    glGenVertexArrays(1, &self->vao);
-    glGenBuffers(1, &self->vbo);
-    glBindVertexArray(self->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, self->vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof verts, verts, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), NULL);
-
-    self->timer = g_timer_new();
-    self->tick_id = gtk_widget_add_tick_callback(GTK_WIDGET(area), on_tick, NULL, NULL);
-}
-
-static void on_unrealize(GtkGLArea *area)
-{
-    gtk_gl_area_make_current(area);
-    ShaderStrip *self = RELAPSE_SHADER_STRIP(area);
-    if (self->tick_id) {
-        gtk_widget_remove_tick_callback(GTK_WIDGET(area), self->tick_id);
-        self->tick_id = 0;
+    GtkWidget *widget = GTK_WIDGET(strip);
+    GtkRoot *root = gtk_widget_get_root(widget);
+    gboolean animations = FALSE;
+    g_object_get(gtk_widget_get_settings(widget), "gtk-enable-animations", &animations, NULL);
+    if (animations && GTK_IS_WINDOW(root) && gtk_window_is_active(GTK_WINDOW(root))) {
+        if (!strip->timer) {
+            advance(strip);
+            strip->timer = g_timeout_add(33, advance, strip);
+        }
+    } else {
+        g_clear_handle_id(&strip->timer, g_source_remove);
     }
-    if (self->vbo) glDeleteBuffers(1, &self->vbo);
-    if (self->vao) glDeleteVertexArrays(1, &self->vao);
-    if (self->program) glDeleteProgram(self->program);
-    self->vbo = self->vao = self->program = 0;
-    if (self->timer) { g_timer_destroy(self->timer); self->timer = NULL; }
 }
 
-static gboolean on_render(GtkGLArea *area, GdkGLContext *ctx)
+static void mapped(GtkWidget *widget)
 {
-    (void)ctx;
-    ShaderStrip *self = RELAPSE_SHADER_STRIP(area);
-    if (!self->program) return FALSE;
-
-    int w = gtk_widget_get_width(GTK_WIDGET(area));
-    int h = gtk_widget_get_height(GTK_WIDGET(area));
-
-    glClearColor(0, 0, 0, 0);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    glUseProgram(self->program);
-    glUniform1f(self->u_time, (float)g_timer_elapsed(self->timer, NULL));
-    glUniform2f(self->u_res, (float)w, (float)h);
-    glBindVertexArray(self->vao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    return TRUE;
+    GTK_WIDGET_CLASS(shader_strip_parent_class)->map(widget);
+    GtkRoot *root = gtk_widget_get_root(widget);
+    if (GTK_IS_WINDOW(root))
+        g_signal_connect_swapped(root, "notify::is-active", G_CALLBACK(sync_animation), widget);
+    g_signal_connect_swapped(gtk_widget_get_settings(widget), "notify::gtk-enable-animations",
+                             G_CALLBACK(sync_animation), widget);
+    sync_animation(RELAPSE_SHADER_STRIP(widget));
 }
 
-static void shader_strip_init(ShaderStrip *self)
+static void unmapped(GtkWidget *widget)
 {
-    gtk_gl_area_set_allowed_apis(GTK_GL_AREA(self), GDK_GL_API_GLES);
-    gtk_gl_area_set_has_depth_buffer(GTK_GL_AREA(self), FALSE);
-    gtk_gl_area_set_has_stencil_buffer(GTK_GL_AREA(self), FALSE);
-    gtk_gl_area_set_auto_render(GTK_GL_AREA(self), TRUE);
-
-    g_signal_connect(self, "realize", G_CALLBACK(on_realize), NULL);
-    g_signal_connect(self, "unrealize", G_CALLBACK(on_unrealize), NULL);
-    g_signal_connect(self, "render", G_CALLBACK(on_render), NULL);
-
-    gtk_widget_set_size_request(GTK_WIDGET(self), -1, 4);
-    gtk_widget_set_hexpand(GTK_WIDGET(self), TRUE);
-    gtk_widget_add_css_class(GTK_WIDGET(self), "shader-strip");
+    ShaderStrip *strip = RELAPSE_SHADER_STRIP(widget);
+    g_clear_handle_id(&strip->timer, g_source_remove);
+    g_signal_handlers_disconnect_by_data(gtk_widget_get_root(widget), strip);
+    g_signal_handlers_disconnect_by_data(gtk_widget_get_settings(widget), strip);
+    GTK_WIDGET_CLASS(shader_strip_parent_class)->unmap(widget);
 }
 
-static void shader_strip_class_init(ShaderStripClass *klass) { (void)klass; }
+static void snapshot(GtkWidget *widget, GtkSnapshot *snapshot)
+{
+    static const GskColorStop stops[] = {
+        {0.0f, {0.34f, 0.34f, 0.34f, 1}},
+        {0.3f, {0.44f, 0.44f, 0.44f, 1}},
+        {0.5f, {0.72f, 0.72f, 0.72f, 1}},
+        {0.7f, {0.44f, 0.44f, 0.44f, 1}},
+        {1.0f, {0.34f, 0.34f, 0.34f, 1}}
+    };
+    float width = gtk_widget_get_width(widget);
+    if (width <= 0 || gtk_widget_get_height(widget) <= 0) return;
+    float wave = 1.4f * width;
+    float start = (RELAPSE_SHADER_STRIP(widget)->phase - 1.0f) * wave;
+    gtk_snapshot_append_repeating_linear_gradient(snapshot,
+        &GRAPHENE_RECT_INIT(0, 0, width, gtk_widget_get_height(widget)),
+        &GRAPHENE_POINT_INIT(start, 0), &GRAPHENE_POINT_INIT(start + wave, 0),
+        stops, G_N_ELEMENTS(stops));
+}
+
+static void shader_strip_init(ShaderStrip *strip)
+{
+    gtk_widget_set_size_request(GTK_WIDGET(strip), -1, 2);
+    gtk_widget_set_can_target(GTK_WIDGET(strip), FALSE);
+}
+
+static void shader_strip_class_init(ShaderStripClass *klass)
+{
+    GtkWidgetClass *widget = GTK_WIDGET_CLASS(klass);
+    widget->snapshot = snapshot;
+    widget->map = mapped;
+    widget->unmap = unmapped;
+    gtk_widget_class_set_accessible_role(widget, GTK_ACCESSIBLE_ROLE_PRESENTATION);
+}
 
 GtkWidget *shader_strip_new(void)
 {

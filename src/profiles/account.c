@@ -87,10 +87,10 @@ static int directory_at(int parent, const char *name, gboolean create, GError **
     return fd;
 }
 
-static int store_open(gboolean create, GError **error)
+static int store_open(GError **error)
 {
-    g_autofree char *path = g_build_filename(g_get_home_dir(), ".local", "share", "relapse", "profiles", NULL);
-    if (create && g_mkdir_with_parents(path, 0700) != 0) {
+    g_autofree char *path = g_build_filename(g_get_user_data_dir(), "relapse", "profiles", NULL);
+    if (g_mkdir_with_parents(path, 0700) != 0) {
         io_failure(error, "Could not create profile store");
         return -1;
     }
@@ -99,15 +99,8 @@ static int store_open(gboolean create, GError **error)
 
 static int profile_open(const char *name, GError **error)
 {
-    if (!profile_name_valid(name)) {
-        failure(error, G_IO_ERROR_INVALID_ARGUMENT, "Invalid profile name.");
-        return -1;
-    }
-    int store = store_open(FALSE, error);
-    if (store < 0) return -1;
-    int profile = directory_at(store, name, FALSE, error);
-    close(store);
-    return profile;
+    g_autofree char *path = profile_data_directory(name, error);
+    return path ? directory_at(AT_FDCWD, path, FALSE, error) : -1;
 }
 
 static char *read_at(int directory, const char *name, GError **error)
@@ -357,11 +350,14 @@ gboolean profile_account_import(const char *name, const char *text, const Profil
     if (!account || account->user_id <= 0 || !valid_label(account->username) || !valid_label(account->display_name) ||
         g_strcmp0(hash, account->cookie_hash) != 0)
         return failure(error, G_IO_ERROR_INVALID_ARGUMENT, "Check the cookie before adding the account.");
-    int store = store_open(create, error);
-    if (store < 0) return FALSE;
+    g_autofree char *profile_path = create ? NULL : profile_data_directory(name, error);
+    if (!create && !profile_path) return FALSE;
+    int store = create ? store_open(error) : -1;
+    if (create && store < 0) return FALSE;
     g_autofree char *uuid = g_uuid_string_random();
     g_autofree char *staging = create ? g_strconcat(".account import ", uuid, NULL) : NULL;
-    int profile = directory_at(store, create ? staging : name, create, error);
+    int profile = create ? directory_at(store, staging, TRUE, error)
+        : directory_at(AT_FDCWD, profile_path, FALSE, error);
     int lock = profile < 0 ? -1 : openat(profile, ".lock", O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
     int sober = -1;
     gboolean ok = FALSE;
@@ -381,7 +377,7 @@ gboolean profile_account_import(const char *name, const char *text, const Profil
     }
     if (!create) {
         struct stat current;
-        if (fstat(profile, &status) != 0 || fstatat(store, name, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
+        if (fstat(profile, &status) != 0 || g_lstat(profile_path, &current) != 0 ||
             status.st_dev != current.st_dev || status.st_ino != current.st_ino) {
             failure(error, G_IO_ERROR_BUSY, "The profile was renamed. Try again.");
             goto done;
@@ -414,17 +410,15 @@ done:
     if (lock >= 0) close(lock);
     if (profile >= 0) close(profile);
     if (create && !ok) remove_staging(store, staging);
-    close(store);
+    if (store >= 0) close(store);
     return ok;
 }
 
-typedef struct { GByteArray *bytes; GCancellable *cancellable; } Download;
-
 static size_t receive(void *data, size_t size, size_t count, void *user_data)
 {
-    Download *download = user_data;
-    if (count > FILE_LIMIT / MAX(size, 1) || download->bytes->len + size * count > FILE_LIMIT) return 0;
-    g_byte_array_append(download->bytes, data, size * count);
+    GByteArray *bytes = user_data;
+    if (count > FILE_LIMIT / MAX(size, 1) || bytes->len + size * count > FILE_LIMIT) return 0;
+    g_byte_array_append(bytes, data, size * count);
     return size * count;
 }
 
@@ -444,7 +438,6 @@ static GBytes *download(const char *url, const char *cookie, GCancellable *cance
     CURL *curl = initialized == 1 ? curl_easy_init() : NULL;
     if (!curl) { failure(error, G_IO_ERROR_FAILED, "Could not initialize account lookup."); return NULL; }
     g_autoptr(GByteArray) bytes = g_byte_array_new();
-    Download state = {bytes, cancellable};
     g_autofree char *header = cookie ? g_strconcat(".ROBLOSECURITY=", cookie, NULL) : NULL;
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
@@ -455,7 +448,7 @@ static GBytes *download(const char *url, const char *cookie, GCancellable *cance
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "RelapseGtk");
     curl_easy_setopt(curl, CURLOPT_COOKIE, header);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, bytes);
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress);
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancellable);
@@ -465,7 +458,8 @@ static GBytes *download(const char *url, const char *cookie, GCancellable *cance
     curl_easy_cleanup(curl);
     if (g_cancellable_set_error_if_cancelled(cancellable, error)) return NULL;
     if (result != CURLE_OK) failure(error, G_IO_ERROR_FAILED, "Could not reach Roblox. Try refreshing again.");
-    else if (status == 401 || status == 403) failure(error, G_IO_ERROR_PERMISSION_DENIED, "Login expired or invalid. Load a new cookie.");
+    else if (status == 401 || status == 403) failure(error, G_IO_ERROR_PERMISSION_DENIED,
+        cookie ? "Login expired or invalid. Load a new cookie." : "This Roblox information is unavailable.");
     else if (status == 429) failure(error, G_IO_ERROR_BUSY, "Roblox is limiting requests. Try again later.");
     else if (status != 200) failure(error, G_IO_ERROR_FAILED, "Roblox could not complete the account lookup.");
     else return g_byte_array_free_to_bytes(g_steal_pointer(&bytes));

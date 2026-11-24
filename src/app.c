@@ -3,6 +3,7 @@
 #include "ui/style.h"
 #include "ui/window.h"
 #include "ui/console.h"
+#include "ui/dialogs.h"
 #include "settings/session.h"
 #include "settings/output.h"
 #include "socket/bridge.h"
@@ -26,6 +27,7 @@ typedef struct {
     gboolean redirect_output;
     GHashTable *launches;
     GHashTable *consoles;
+    GHashTable *dialogs;
 } App;
 
 typedef struct {
@@ -48,6 +50,12 @@ static void console_answer(gint64 id, const char *text, gpointer user_data)
     sessions_console_input(view->app->sessions, view->path, id, text);
 }
 
+static void console_closed(gpointer user_data)
+{
+    ConsoleView *view = user_data;
+    sessions_console_closed(view->app->sessions, view->path);
+}
+
 static ConsoleView *console_view(App *app, const char *path)
 {
     ConsoleView *view = g_hash_table_lookup(app->consoles, path);
@@ -55,7 +63,7 @@ static ConsoleView *console_view(App *app, const char *path)
     view = g_new0(ConsoleView, 1);
     view->app = app;
     view->path = g_strdup(path);
-    view->window = console_window_new(app->window, console_answer, view);
+    view->window = console_window_new(app->window, console_answer, console_closed, view);
     g_hash_table_insert(app->consoles, view->path, view);
     return view;
 }
@@ -85,7 +93,75 @@ static void console_input(const char *path, gint64 id, gpointer user_data)
     console_window_request_input(console_view(user_data, path)->window, id);
 }
 
+static void console_destroy(const char *path, gpointer user_data)
+{
+    App *app = user_data;
+    g_hash_table_remove(app->consoles, path);
+}
+
+typedef struct {
+    App *app;
+    char *path;
+    gint64 id;
+    GtkWindow *window;
+} DialogView;
+
+static void free_dialog_view(gpointer user_data)
+{
+    DialogView *view = user_data;
+    gtk_window_destroy(view->window);
+    g_free(view->path);
+    g_free(view);
+}
+
+static void dialog_close(const char *path, gint64 id, gpointer user_data)
+{
+    App *app = user_data;
+    GHashTable *views = g_hash_table_lookup(app->dialogs, path);
+    if (views) g_hash_table_remove(views, &id);
+}
+
+static void dialog_choice(gint64 id, guint choice, gpointer user_data)
+{
+    DialogView *view = user_data;
+    App *app = view->app;
+    g_autofree char *path = g_strdup(view->path);
+    dialog_close(path, id, app);
+    sessions_dialog_choice(app->sessions, path, id, choice);
+}
+
+static void dialog_open(const char *path, gint64 id, const char *title, const char *text,
+                        const char *const *buttons, const char *icon, guint default_button, gpointer user_data)
+{
+    App *app = user_data;
+    GHashTable *views = g_hash_table_lookup(app->dialogs, path);
+    if (!views) {
+        views = g_hash_table_new_full(g_int64_hash, g_int64_equal, NULL, free_dialog_view);
+        g_hash_table_insert(app->dialogs, g_strdup(path), views);
+    }
+    DialogView *view = g_new0(DialogView, 1);
+    view->app = app;
+    view->path = g_strdup(path);
+    view->id = id;
+    view->window = dialog_window_new(app->window, id, title, text, buttons, icon, default_button, dialog_choice, view);
+    g_hash_table_insert(views, &view->id, view);
+    gtk_window_present(view->window);
+}
+
+static void dialogs_reset(const char *path, gpointer user_data)
+{
+    App *app = user_data;
+    g_hash_table_remove(app->dialogs, path);
+}
+
 static void update_connection_status(App *app);
+
+static void ready_changed(const char *path, gpointer user_data)
+{
+    App *app = user_data;
+    if (app->window && app->socket_paths && g_strv_contains((const char *const *)app->socket_paths, path))
+        update_connection_status(app);
+}
 
 #ifdef RELAPSEGTK_UPDATE_ENABLED
 typedef struct {
@@ -233,15 +309,16 @@ static gboolean save_restore_tabs(gboolean enabled, GError **error, gpointer use
 static void update_connection_status(App *app)
 {
     guint selected = app->socket_paths ? g_strv_length(app->socket_paths) : 0;
+    guint ready = count_ready_clients(app);
     if (selected > 1) {
-        guint ready = count_ready_clients(app);
         g_autofree char *label = g_strdup_printf("%u of %u ready", ready, selected);
         window_set_status(app->window, label, "Execute sends to the selected clients that are ready.", ready > 0);
     } else if (!selected) {
-        window_set_status(app->window, "No target", "Select clients beside Execute.", FALSE);
+        window_set_status(app->window, NULL, "No target selected. Choose a client beside Execute.", FALSE);
     } else switch (sessions_get_state(app->sessions, app->socket_paths[0])) {
         case SOCKET_CLIENT_READY:
-            window_set_status(app->window, "Ready", "Connected. Ready to execute scripts.", TRUE);
+            window_set_status(app->window, ready ? "Ready" : "Starting UI",
+                ready ? "Connected. Ready to execute scripts." : "Waiting for the UI helpers to connect.", ready > 0);
             break;
         case SOCKET_CLIENT_WAITING:
             window_set_status(app->window, "Not ready", "Connected. Waiting for a game to be ready.", FALSE);
@@ -314,6 +391,13 @@ static gboolean save_scripts_path(const char *path, GError **error, gpointer use
     app->scripts_path = g_strdup(path);
     window_set_scripts_path(app->window, path);
     return TRUE;
+}
+
+static const ProfileJoinTarget *profile_session(const char *name, gpointer user_data)
+{
+    App *app = user_data;
+    g_autofree char *path = g_strdup_printf("/tmp/relapse-%s.sock", name);
+    return sessions_join_target(app->sessions, path);
 }
 
 static gboolean profile_running(const char *name, gpointer user_data)
@@ -404,6 +488,8 @@ static void window_destroyed(GtkWidget *window, gpointer user_data)
         app->discovery = 0;
     }
     g_clear_pointer(&app->sessions, sessions_free);
+    g_hash_table_remove_all(app->dialogs);
+    g_hash_table_remove_all(app->consoles);
 }
 
 static void free_app(gpointer user_data)
@@ -415,6 +501,7 @@ static void free_app(gpointer user_data)
     g_strfreev(app->socket_paths);
     g_hash_table_unref(app->launches);
     g_hash_table_unref(app->consoles);
+    g_hash_table_unref(app->dialogs);
     g_free(app);
 }
 
@@ -437,6 +524,7 @@ static void activate(GtkApplication *application, gpointer user_data)
     App *app = g_new0(App, 1);
     app->launches = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
     app->consoles = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, free_console_view);
+    app->dialogs = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_hash_table_unref);
     g_autoptr(GError) settings_error = NULL;
     app->scripts_path = scripts_settings_load(&settings_error);
     if (!app->scripts_path) {
@@ -447,7 +535,8 @@ static void activate(GtkApplication *application, gpointer user_data)
         .execute = execute_script, .open_script = open_script, .active_script_changed = update_execute,
         .editor_settings_changed = save_editor_settings, .restore_tabs_changed = save_restore_tabs,
         .output_changed = save_output, .launcher_changed = save_launcher, .scripts_changed = save_scripts_path,
-        .socket_selected = select_socket, .launch_profile = launch_profile, .profile_running = profile_running
+        .socket_selected = select_socket, .launch_profile = launch_profile, .profile_running = profile_running,
+        .profile_session = profile_session
     };
     app->window = window_new(application, app->scripts_path, &window_handlers, app);
     EditorSettings settings;
@@ -484,7 +573,9 @@ static void activate(GtkApplication *application, gpointer user_data)
         .state_changed = socket_state_changed, .output_changed = output_state_changed,
         .entry = output_entry, .result = script_result,
         .console_show = console_show, .console_title = console_title, .console_clear = console_clear,
-        .console_entry = console_entry, .console_input = console_input
+        .console_entry = console_entry, .console_input = console_input, .console_destroy = console_destroy,
+        .dialog_open = dialog_open, .dialog_close = dialog_close, .dialogs_reset = dialogs_reset,
+        .ready_changed = ready_changed
     };
     app->sessions = sessions_new(&session_handlers, app);
     sessions_set_output_enabled(app->sessions, app->redirect_output);

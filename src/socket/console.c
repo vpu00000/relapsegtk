@@ -14,7 +14,15 @@ struct ConsoleBridge {
     GHashTable *requests;
     gint64 request_id, session, deadline;
     gboolean ready;
+    ProfileJoinTarget target;
 };
+
+static void clear_target(ConsoleBridge *bridge)
+{
+    g_clear_pointer(&bridge->target.place, g_free);
+    g_clear_pointer(&bridge->target.job, g_free);
+    g_clear_pointer(&bridge->target.title, g_free);
+}
 
 static void cancel_timer(ConsoleBridge *bridge)
 {
@@ -26,10 +34,13 @@ static void cancel_timer(ConsoleBridge *bridge)
 
 static void stop(ConsoleBridge *bridge)
 {
+    clear_target(bridge);
     cancel_timer(bridge);
     g_clear_pointer(&bridge->channel, relapse_socket_free);
     bridge->request_id = 0;
+    gboolean was_ready = bridge->ready;
     bridge->ready = FALSE;
+    if (was_ready && bridge->handlers.changed) bridge->handlers.changed(bridge->user_data);
 }
 
 static void fail(ConsoleBridge *bridge, const char *detail)
@@ -96,6 +107,19 @@ static void message_received(RelapseSocket *socket, GBytes *message, gpointer us
         if (!title || strlen(title) > 255 || !member_is(object, "visible", G_TYPE_BOOLEAN)) goto invalid;
         if (bridge->handlers.title) bridge->handlers.title(title, bridge->user_data);
         show(bridge, json_object_get_boolean_member(object, "visible"));
+    } else if (g_str_equal(type, "place")) {
+        const char *place = string_member(object, "placeId");
+        const char *job = string_member(object, "jobId");
+        const char *name = string_member(object, "name");
+        clear_target(bridge);
+        if (place && g_ascii_isdigit(*place) &&
+            g_ascii_string_to_unsigned(place, 10, 1, G_MAXINT64, NULL, NULL) &&
+            job && g_uuid_string_is_valid(job)) {
+            bridge->target.place = g_strdup(place);
+            bridge->target.job = g_strdup(job);
+            if (name && *name && strlen(name) <= 255 && !strpbrk(name, "\r\n\t"))
+                bridge->target.title = g_strdup(name);
+        }
     } else if (g_str_equal(type, "show")) {
         show(bridge, TRUE);
     } else if (g_str_equal(type, "hide")) {
@@ -106,6 +130,8 @@ static void message_received(RelapseSocket *socket, GBytes *message, gpointer us
         if (bridge->handlers.title) bridge->handlers.title(title, bridge->user_data);
     } else if (g_str_equal(type, "clear")) {
         if (bridge->handlers.clear) bridge->handlers.clear(bridge->user_data);
+    } else if (g_str_equal(type, "destroy")) {
+        if (bridge->handlers.destroy) bridge->handlers.destroy(bridge->user_data);
     } else if (g_str_equal(type, "print")) {
         const char *level = string_member(object, "level");
         const char *text = string_member(object, "text");
@@ -127,6 +153,7 @@ static void connected(RelapseSocket *socket, gpointer user_data)
     ConsoleBridge *bridge = user_data;
     bridge->ready = TRUE;
     cancel_timer(bridge);
+    if (bridge->handlers.changed) bridge->handlers.changed(bridge->user_data);
 }
 
 static gboolean tick(gpointer user_data)
@@ -137,7 +164,7 @@ static gboolean tick(gpointer user_data)
         return G_SOURCE_REMOVE;
     }
     if (relapse_socket_get_state(bridge->channel) == RELAPSE_SOCKET_CLOSED)
-        relapse_socket_connect(bridge->channel, socket_client_get_path(bridge->client), "relapsegtk.console.v1", NULL);
+        relapse_socket_connect(bridge->channel, socket_client_get_path(bridge->client), "relapsegtk.console.v3", NULL);
     return G_SOURCE_CONTINUE;
 }
 
@@ -163,6 +190,9 @@ static void closed(RelapseSocket *socket, RelapseSocketCloseReason reason, const
     ConsoleBridge *bridge = user_data;
     if (!bridge->ready) return;
     bridge->ready = FALSE;
+    clear_target(bridge);
+    if (bridge->handlers.destroy) bridge->handlers.destroy(bridge->user_data);
+    if (bridge->handlers.changed) bridge->handlers.changed(bridge->user_data);
     reconnect(bridge);
 }
 
@@ -210,9 +240,20 @@ void console_bridge_sync(ConsoleBridge *bridge)
 {
     gint64 session = socket_client_get_session(bridge->client);
     if (bridge->session == session) return;
+    if (bridge->session && bridge->handlers.destroy) bridge->handlers.destroy(bridge->user_data);
     bridge->session = session;
     if (session) start(bridge);
     else stop(bridge);
+}
+
+gboolean console_bridge_is_ready(ConsoleBridge *bridge)
+{
+    return bridge && bridge->ready;
+}
+
+const ProfileJoinTarget *console_bridge_join_target(ConsoleBridge *bridge)
+{
+    return bridge && bridge->ready && bridge->target.job ? &bridge->target : NULL;
 }
 
 gboolean console_bridge_result(ConsoleBridge *bridge, gint64 id, gboolean submitted, const char *detail)
@@ -240,9 +281,18 @@ void console_bridge_input(ConsoleBridge *bridge, gint64 id, const char *text)
         fail(bridge, "Could not answer the console input request");
 }
 
+void console_bridge_closed(ConsoleBridge *bridge)
+{
+    if (!bridge->ready) return;
+    g_autoptr(GBytes) message = g_bytes_new_static("{\"op\":\"closed\"}", sizeof("{\"op\":\"closed\"}") - 1);
+    if (relapse_socket_send(bridge->channel, message) != RELAPSE_SOCKET_QUEUED)
+        fail(bridge, "Could not report the console being closed");
+}
+
 void console_bridge_free(ConsoleBridge *bridge)
 {
     if (!bridge) return;
+    bridge->handlers.changed = NULL;
     stop(bridge);
     g_hash_table_unref(bridge->requests);
     g_main_context_unref(bridge->context);

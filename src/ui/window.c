@@ -5,9 +5,9 @@
 #include "toolbar.h"
 #include "style.h"
 #include "output.h"
-#include "shader_strip.h"
 #include "profiles.h"
 #include "accounts.h"
+#include "shader_strip.h"
 
 typedef struct {
     GtkWidget *tabs;
@@ -16,7 +16,7 @@ typedef struct {
     GtkWidget *accounts;
     GtkWidget *scripts;
     GtkWidget *socket_picker;
-    gboolean output_enabled;
+    GSimpleAction *show_output;
     GtkStack *views;
     GtkWidget *editor_page;
     GtkWidget *settings_page;
@@ -24,7 +24,8 @@ typedef struct {
     GtkToggleButton *accounts_button;
     GtkToggleButton *settings_button;
     GSimpleAction *save;
-    GSimpleAction *find[3];
+    GSimpleAction *clear_untitled;
+    GSimpleAction *find[4];
     gboolean stopped;
     WindowHandlers handlers;
     gpointer user_data;
@@ -76,6 +77,13 @@ static gboolean scripts_changed(const char *path, GError **error, gpointer user_
         state->handlers.scripts_changed(path, error, state->user_data));
 }
 
+static gboolean script_directory_changed(const char *path, GError **error, gpointer user_data)
+{
+    Window *state = user_data;
+    return !state->stopped && (!state->handlers.scripts_changed ||
+        state->handlers.scripts_changed(path, error, state->user_data));
+}
+
 static void socket_selected(const char *const *paths, gpointer user_data)
 {
     Window *state = window_data(user_data);
@@ -99,6 +107,13 @@ static gboolean launch_profile(const char *name, const char *place_id, const cha
     return FALSE;
 }
 
+static const ProfileJoinTarget *profile_session(const char *name, gpointer user_data)
+{
+    Window *state = window_data(user_data);
+    return !state->stopped && state->handlers.profile_session
+        ? state->handlers.profile_session(name, state->user_data) : NULL;
+}
+
 static gboolean profile_running(const char *name, gpointer user_data)
 {
     Window *state = window_data(user_data);
@@ -115,7 +130,7 @@ static gboolean editor_visible(Window *window)
 void window_set_output_enabled(GtkWindow *window, gboolean enabled)
 {
     Window *state = window_data(window);
-    state->output_enabled = enabled;
+    g_simple_action_set_state(state->show_output, g_variant_new_boolean(enabled));
     gtk_widget_set_visible(state->output, enabled);
     settings_set_output(state->settings_page, enabled);
 }
@@ -128,7 +143,7 @@ void window_set_output_status(GtkWindow *window, const char *path, const char *t
 void window_append_output(GtkWindow *window, const char *path, const char *level, const char *text)
 {
     Window *state = window_data(window);
-    if (state->output_enabled)
+    if (gtk_widget_get_visible(state->output))
         output_append(state->output, path, level, text);
 }
 
@@ -145,6 +160,12 @@ static void output_changed(gboolean enabled, gpointer user_data)
         gtk_alert_dialog_set_detail(alert, error ? error->message : "Changes will apply for this session only.");
         gtk_alert_dialog_show(alert, window);
     }
+}
+
+static void change_output_state(GSimpleAction *action, GVariant *value, gpointer user_data)
+{
+    (void)action;
+    output_changed(g_variant_get_boolean(value), user_data);
 }
 
 void window_set_execute_state(GtkWindow *window, gboolean enabled, guint ready, guint selected)
@@ -243,58 +264,10 @@ static void script_selected(GFile *file, const char *display_name, gpointer user
         window->handlers.open_script(file, display_name, window->user_data);
 }
 
-static GFile *script_renamed(GFile *file, const char *name, GError **error, gpointer user_data)
+static gboolean script_moved(GFile *file, GFile *destination, GError **error, gpointer user_data)
 {
     Window *window = user_data;
-    return tabs_rename(window->tabs, file, name, error);
-}
-
-static void save_active_requested(gpointer user_data)
-{
-    Window *window = user_data;
-    if (editor_visible(window))
-        tabs_save(window->tabs);
-}
-
-static void delete_finished(GObject *source, GAsyncResult *result, gpointer user_data)
-{
-    (void)user_data;
-    g_autoptr(GError) error = NULL;
-    if (!g_file_delete_finish(G_FILE(source), result, &error) &&
-        !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-        g_warning("delete failed: %s", error ? error->message : "unknown");
-}
-
-static void delete_confirmed(GObject *source, GAsyncResult *result, gpointer user_data)
-{
-    Window *window = user_data;
-    int choice = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(source), result, NULL);
-    if (choice != 1 || window->stopped) return;
-    GFile *file = tabs_get_current_file(window->tabs);
-    if (!file) return;
-    g_object_ref(file);
-    tabs_close_current(window->tabs);
-    g_file_delete_async(file, G_PRIORITY_DEFAULT, NULL, delete_finished, NULL);
-    g_object_unref(file);
-}
-
-static void delete_active_requested(gpointer user_data)
-{
-    Window *window = user_data;
-    if (!editor_visible(window)) return;
-    GFile *file = tabs_get_current_file(window->tabs);
-    if (!file) return;
-    g_autofree char *basename = g_file_get_basename(file);
-    g_autofree char *msg = g_strdup_printf("Delete %s?", basename ? basename : "this script");
-    GtkAlertDialog *alert = gtk_alert_dialog_new("%s", msg);
-    gtk_alert_dialog_set_detail(alert, "This will remove the file from disk.");
-    const char *buttons[] = {"Cancel", "Delete", NULL};
-    gtk_alert_dialog_set_buttons(alert, buttons);
-    gtk_alert_dialog_set_cancel_button(alert, 0);
-    gtk_alert_dialog_set_default_button(alert, 0);
-    GtkWindow *parent = GTK_WINDOW(gtk_widget_get_root(GTK_WIDGET(window->tabs)));
-    gtk_alert_dialog_choose(alert, parent, NULL, delete_confirmed, window);
-    g_object_unref(alert);
+    return tabs_move_file(window->tabs, file, destination, error);
 }
 
 static void tabs_changed(GtkWidget *tabs, gpointer user_data)
@@ -302,12 +275,15 @@ static void tabs_changed(GtkWidget *tabs, gpointer user_data)
     Window *window = user_data;
     if (window->stopped)
         return;
+    if (window->scripts)
+        scripts_set_active_file(window->scripts, tabs_get_current_file(tabs));
     gboolean have_buffer = editor_visible(window) && tabs_get_buffer(tabs) != NULL;
     g_simple_action_set_enabled(window->save, have_buffer);
+    gboolean in_settings = window->settings_page &&
+        gtk_stack_get_visible_child(window->views) == window->settings_page;
+    g_simple_action_set_enabled(window->clear_untitled, in_settings && tabs_can_clear_untitled(tabs));
     for (guint i = 0; i < G_N_ELEMENTS(window->find); ++i)
         g_simple_action_set_enabled(window->find[i], have_buffer);
-    if (window->toolbar)
-        toolbar_set_active_enabled(window->toolbar, have_buffer);
     if (window->handlers.active_script_changed)
         window->handlers.active_script_changed(window->user_data);
 }
@@ -328,8 +304,8 @@ static void find_requested(GSimpleAction *action, GVariant *parameter, gpointer 
     if (!editor_visible(window))
         return;
     const char *name = g_action_get_name(G_ACTION(action));
-    if (g_str_equal(name, "find"))
-        tabs_find(window->tabs);
+    if (g_str_equal(name, "find") || g_str_equal(name, "replace"))
+        tabs_find(window->tabs, g_str_equal(name, "replace"));
     else
         tabs_find_next(window->tabs, g_str_equal(name, "find-previous"));
 }
@@ -363,7 +339,7 @@ static GtkToggleButton *navigation_button(const char *label, const char *view,
     gtk_widget_set_tooltip_text(button, label);
     gtk_accessible_update_property(GTK_ACCESSIBLE(button), GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
     GtkWidget *image = gtk_image_new_from_resource(icon);
-    gtk_image_set_pixel_size(GTK_IMAGE(image), 22);
+    gtk_image_set_pixel_size(GTK_IMAGE(image), 18);
     gtk_button_set_child(GTK_BUTTON(button), image);
     g_object_set_data_full(G_OBJECT(button), "view-name", g_strdup(view), g_free);
     g_signal_connect(button, "toggled", G_CALLBACK(view_selected), window);
@@ -377,7 +353,7 @@ static GtkWidget *create_navigation(Window *window)
     gtk_accessible_update_property(GTK_ACCESSIBLE(rail), GTK_ACCESSIBLE_PROPERTY_LABEL, "Navigation", -1);
     window->editor_button = navigation_button("Editor", "editor",
         "/org/relapse/RelapseGtk/icons/editor.svg", window);
-    window->accounts_button = navigation_button("Accounts", "accounts",
+    window->accounts_button = navigation_button("Profiles", "accounts",
         "/org/relapse/RelapseGtk/icons/profiles.svg", window);
     window->settings_button = navigation_button("Settings", "settings",
         "/org/relapse/RelapseGtk/icons/settings.svg", window);
@@ -399,6 +375,10 @@ static void window_destroyed(GtkWidget *widget, gpointer user_data)
     (void)widget;
     Window *window = user_data;
     window->stopped = TRUE;
+    if (window->scripts) {
+        scripts_shutdown(window->scripts);
+        window->scripts = NULL;
+    }
     if (window->accounts) {
         accounts_shutdown(window->accounts);
         window->accounts = NULL;
@@ -417,6 +397,8 @@ static void window_destroyed(GtkWidget *widget, gpointer user_data)
     }
     g_clear_object(&window->views);
     g_clear_object(&window->save);
+    g_clear_object(&window->clear_untitled);
+    g_clear_object(&window->show_output);
     for (guint i = 0; i < G_N_ELEMENTS(window->find); ++i)
         g_clear_object(&window->find[i]);
 }
@@ -438,20 +420,20 @@ static void toggle_maximize(GtkWindow *window)
 static GtkWidget *create_titlebar(GtkWindow *window)
 {
     GtkWidget *bar = gtk_header_bar_new();
+    gtk_widget_add_css_class(bar, "app-titlebar");
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(bar), FALSE);
+    GtkWidget *brand = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 7);
 
     GtkWidget *logo = gtk_image_new_from_resource("/org/relapse/RelapseGtk/icons/relapse.svg");
-    gtk_image_set_pixel_size(GTK_IMAGE(logo), 20);
-    gtk_widget_add_css_class(logo, "app-logo");
-    gtk_widget_set_margin_start(logo, 4);
-    gtk_widget_set_margin_end(logo, 4);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(bar), logo);
+    gtk_image_set_pixel_size(GTK_IMAGE(logo), 16);
+    gtk_box_append(GTK_BOX(brand), logo);
 
     GtkWidget *title = gtk_label_new(NULL);
-    gtk_widget_add_css_class(title, "title");
+    gtk_widget_add_css_class(title, "app-wordmark");
     gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_END);
     g_object_bind_property(window, "title", title, "label", G_BINDING_SYNC_CREATE);
-    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(bar), title);
+    gtk_box_append(GTK_BOX(brand), title);
+    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(bar), brand);
 
     const struct {
         const char *glyph;
@@ -463,6 +445,7 @@ static GtkWidget *create_titlebar(GtkWindow *window)
         {"×", "Close", G_CALLBACK(gtk_window_close)}
     };
     GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+    gtk_widget_set_valign(buttons, GTK_ALIGN_CENTER);
     for (guint i = 0; i < G_N_ELEMENTS(controls); ++i) {
         GtkWidget *button = gtk_button_new_with_label(controls[i].glyph);
         gtk_widget_add_css_class(button, "window-control");
@@ -473,12 +456,10 @@ static GtkWidget *create_titlebar(GtkWindow *window)
         gtk_box_append(GTK_BOX(buttons), button);
     }
     gtk_header_bar_pack_end(GTK_HEADER_BAR(bar), buttons);
-
-    GtkWidget *wrap = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_add_css_class(wrap, "titlebar-wrap");
-    gtk_box_append(GTK_BOX(wrap), bar);
-    gtk_box_append(GTK_BOX(wrap), shader_strip_new());
-    return wrap;
+    GtkWidget *titlebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(titlebar), bar);
+    gtk_box_append(GTK_BOX(titlebar), shader_strip_new());
+    return titlebar;
 }
 
 GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
@@ -491,7 +472,7 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     g_object_set_data_full(G_OBJECT(window), "window", state, free_window);
     g_signal_connect(window, "destroy", G_CALLBACK(window_destroyed), state);
     gtk_window_set_default_size(window, 860, 480);
-    gtk_window_set_title(window, "relapsegtk");
+    gtk_window_set_title(window, "Relapse");
     gtk_window_set_titlebar(window, create_titlebar(window));
 
     state->save = g_simple_action_new("save", NULL);
@@ -501,8 +482,15 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     const char *save_accels[] = {"<Control>s", NULL};
     gtk_application_set_accels_for_action(application, "win.save", save_accels);
 
-    const char *find_names[] = {"find", "find-next", "find-previous"};
-    const char *find_accels[] = {"<Control>f", "F3", "<Shift>F3"};
+    state->clear_untitled = g_simple_action_new("clear-untitled", NULL);
+    g_action_map_add_action(G_ACTION_MAP(window), G_ACTION(state->clear_untitled));
+
+    state->show_output = g_simple_action_new_stateful("show-output", NULL, g_variant_new_boolean(FALSE));
+    g_signal_connect(state->show_output, "change-state", G_CALLBACK(change_output_state), window);
+    g_action_map_add_action(G_ACTION_MAP(window), G_ACTION(state->show_output));
+
+    const char *find_names[] = {"find", "replace", "find-next", "find-previous"};
+    const char *find_accels[] = {"<Control>f", "<Control>h", "F3", "<Shift>F3"};
     for (guint i = 0; i < G_N_ELEMENTS(find_names); ++i) {
         state->find[i] = g_simple_action_new(find_names[i], NULL);
         g_simple_action_set_enabled(state->find[i], FALSE);
@@ -513,13 +501,11 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
         gtk_application_set_accels_for_action(application, action, accels);
     }
 
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    gtk_widget_set_margin_top(box, 12);
-    gtk_widget_set_margin_bottom(box, 12);
-    gtk_widget_set_margin_start(box, 12);
-    gtk_widget_set_margin_end(box, 12);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
     state->tabs = g_object_ref_sink(tabs_new(scripts_path, tabs_changed, state));
+    g_signal_connect_object(state->clear_untitled, "activate", G_CALLBACK(tabs_clear_untitled),
+                            state->tabs, G_CONNECT_SWAPPED);
     GtkWidget *editor_split = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
     gtk_widget_add_css_class(editor_split, "editor-output-split");
     gtk_widget_set_vexpand(editor_split, TRUE);
@@ -535,28 +521,28 @@ GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
     ToolbarHandlers toolbar_handlers = {
         .execute       = execute_requested,
         .open_script   = script_selected,
-        .save_active   = save_active_requested,
-        .delete_active = delete_active_requested,
     };
     state->socket_picker = socket_picker_new(socket_selected, window);
     state->toolbar = toolbar_new(window, scripts_path, state->socket_picker, &toolbar_handlers, state);
     gtk_box_append(GTK_BOX(box), state->toolbar);
     GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    state->scripts = scripts_new(scripts_path, script_selected, script_renamed, state);
+    gtk_widget_add_css_class(paned, "scripts-split");
+    state->scripts = scripts_new(scripts_path, script_selected, script_moved,
+        script_directory_changed, state);
     gtk_widget_set_vexpand(state->scripts, TRUE);
     gtk_paned_set_start_child(GTK_PANED(paned), state->scripts);
     gtk_paned_set_end_child(GTK_PANED(paned), box);
     gtk_paned_set_resize_start_child(GTK_PANED(paned), FALSE);
     gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);
     gtk_paned_set_shrink_end_child(GTK_PANED(paned), FALSE);
-    gtk_paned_set_position(GTK_PANED(paned), 220);
+    gtk_paned_set_position(GTK_PANED(paned), 192);
     state->editor_page = paned;
     state->views = g_object_ref_sink(GTK_STACK(gtk_stack_new()));
     gtk_widget_set_hexpand(GTK_WIDGET(state->views), TRUE);
     gtk_widget_set_vexpand(GTK_WIDGET(state->views), TRUE);
     gtk_stack_add_titled(state->views, paned, "editor", "Editor");
-    state->accounts = accounts_new(launch_profile, profile_running, window);
-    gtk_stack_add_titled(state->views, state->accounts, "accounts", "Accounts");
+    state->accounts = accounts_new(launch_profile, profile_running, profile_session, window);
+    gtk_stack_add_titled(state->views, state->accounts, "accounts", "Profiles");
     EditorSettings defaults = editor_settings_defaults();
     state->settings_page = settings_new(&defaults, editor_settings_changed, restore_tabs_changed,
                                         output_changed, launcher_changed, scripts_changed, window);

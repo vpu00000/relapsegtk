@@ -18,8 +18,8 @@ typedef struct {
     SocketClient *client;
     UiBridge *bridge;
     ConsoleBridge *console;
+    DialogBridge *dialogs;
     SocketClientState state;
-    OutputState output_state;
     GPid pid;
     int pid_fd;
     gboolean available;
@@ -48,7 +48,6 @@ static void output_changed(OutputState state, const char *detail, gpointer user_
 {
     Session *session = user_data;
     Sessions *owner = session->owner;
-    session->output_state = state;
     if (owner->handlers.output_changed)
         owner->handlers.output_changed(session->path, state, detail, owner->user_data);
 }
@@ -89,6 +88,43 @@ static void console_entry(const char *level, const char *text, gpointer user_dat
         session->owner->handlers.console_entry(session->path, level, text, session->owner->user_data);
 }
 
+static void console_destroy(gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.console_destroy)
+        session->owner->handlers.console_destroy(session->path, session->owner->user_data);
+}
+
+static void ready_changed(gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.ready_changed)
+        session->owner->handlers.ready_changed(session->path, session->owner->user_data);
+}
+
+static void dialog_open(gint64 id, const char *title, const char *text, const char *const *buttons,
+                        const char *icon, guint default_button, gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.dialog_open)
+        session->owner->handlers.dialog_open(session->path, id, title, text, buttons, icon, default_button,
+                                             session->owner->user_data);
+}
+
+static void dialog_close(gint64 id, gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.dialog_close)
+        session->owner->handlers.dialog_close(session->path, id, session->owner->user_data);
+}
+
+static void dialogs_reset(gpointer user_data)
+{
+    Session *session = user_data;
+    if (session->owner->handlers.dialogs_reset)
+        session->owner->handlers.dialogs_reset(session->path, session->owner->user_data);
+}
+
 static void console_input(gint64 id, gpointer user_data)
 {
     Session *session = user_data;
@@ -104,6 +140,7 @@ static void state_changed(SocketClientState state, const char *detail, gpointer 
     remember_process(session);
     ui_bridge_sync(session->bridge);
     console_bridge_sync(session->console);
+    dialog_bridge_sync(session->dialogs);
     if (owner->handlers.state_changed)
         owner->handlers.state_changed(session->path, state, detail, owner->user_data);
 }
@@ -114,6 +151,7 @@ static void result(gint64 id, gboolean submitted, const char *detail, gpointer u
     Sessions *owner = session->owner;
     if (ui_bridge_result(session->bridge, id, submitted, detail)) return;
     if (console_bridge_result(session->console, id, submitted, detail)) return;
+    if (dialog_bridge_result(session->dialogs, id, submitted, detail)) return;
     if (owner->handlers.result)
         owner->handlers.result(session->path, id, submitted, detail, owner->user_data);
 }
@@ -126,6 +164,7 @@ static void error(const char *detail, gpointer user_data)
 static void free_session(gpointer user_data)
 {
     Session *session = user_data;
+    dialog_bridge_free(session->dialogs);
     console_bridge_free(session->console);
     ui_bridge_free(session->bridge);
     socket_client_free(session->client);
@@ -173,9 +212,15 @@ void sessions_update(Sessions *sessions, const char *const *paths)
         session->bridge = ui_bridge_new(session->client, &output_handlers, session);
         ConsoleBridgeHandlers console_handlers = {
             .show = console_show, .title = console_title, .clear = console_clear,
-            .entry = console_entry, .input = console_input, .error = error
+            .entry = console_entry, .input = console_input, .error = error,
+            .destroy = console_destroy, .changed = ready_changed
         };
         session->console = console_bridge_new(session->client, &console_handlers, session);
+        DialogBridgeHandlers dialog_handlers = {
+            .open = dialog_open, .close = dialog_close, .reset = dialogs_reset,
+            .changed = ready_changed, .error = error
+        };
+        session->dialogs = dialog_bridge_new(session->client, &dialog_handlers, session);
         g_hash_table_insert(sessions->clients, session->path, session);
         ui_bridge_set_output_enabled(session->bridge, sessions->output_enabled);
         socket_client_start(session->client);
@@ -223,10 +268,10 @@ gboolean sessions_is_active(Sessions *sessions, const char *path)
     return session && (session->available || process_running(session));
 }
 
-SocketClient *sessions_get_client(Sessions *sessions, const char *path)
+const ProfileJoinTarget *sessions_join_target(Sessions *sessions, const char *path)
 {
     Session *session = lookup(sessions, path);
-    return session ? session->client : NULL;
+    return session && socket_client_is_ready(session->client) ? console_bridge_join_target(session->console) : NULL;
 }
 
 SocketClientState sessions_get_state(Sessions *sessions, const char *path)
@@ -235,28 +280,35 @@ SocketClientState sessions_get_state(Sessions *sessions, const char *path)
     return session ? session->state : SOCKET_CLIENT_DISCONNECTED;
 }
 
-OutputState sessions_get_output_state(Sessions *sessions, const char *path)
-{
-    Session *session = lookup(sessions, path);
-    return session ? session->output_state : OUTPUT_OFF;
-}
-
 gboolean sessions_can_execute(Sessions *sessions, const char *path)
 {
     Session *session = lookup(sessions, path);
-    return session && ui_bridge_is_ready(session->bridge);
+    return session && ui_bridge_is_ready(session->bridge) && console_bridge_is_ready(session->console) &&
+        dialog_bridge_is_ready(session->dialogs);
 }
 
 SocketClientSendResult sessions_execute(Sessions *sessions, const char *path, const char *name, const char *source)
 {
     Session *session = lookup(sessions, path);
-    return session ? ui_bridge_execute(session->bridge, name, source) : SOCKET_CLIENT_NOT_READY;
+    return sessions_can_execute(sessions, path) ? ui_bridge_execute(session->bridge, name, source) : SOCKET_CLIENT_NOT_READY;
 }
 
 void sessions_console_input(Sessions *sessions, const char *path, gint64 id, const char *text)
 {
     Session *session = lookup(sessions, path);
     if (session) console_bridge_input(session->console, id, text);
+}
+
+void sessions_console_closed(Sessions *sessions, const char *path)
+{
+    Session *session = lookup(sessions, path);
+    if (session) console_bridge_closed(session->console);
+}
+
+void sessions_dialog_choice(Sessions *sessions, const char *path, gint64 id, guint choice)
+{
+    Session *session = lookup(sessions, path);
+    if (session) dialog_bridge_choice(session->dialogs, id, choice);
 }
 
 void sessions_free(Sessions *sessions)

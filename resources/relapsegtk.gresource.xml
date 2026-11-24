@@ -4,19 +4,16 @@
     <file>style.css</file>
     <file>scripts/session.luau</file>
     <file>scripts/console.luau</file>
+    <file>scripts/dialogs.luau</file>
     <file>styles/relapse.xml</file>
     <file>icons/relapse.svg</file>
-    <file>icons/chevron-left.svg</file>
-    <file>icons/chevron-right.svg</file>
     <file>icons/caret-down.svg</file>
-    <file>icons/rename.svg</file>
     <file>icons/profiles.svg</file>
     <file>icons/editor.svg</file>
-    <file>icons/autoexec.svg</file>
     <file>icons/settings.svg</file>
     <file>icons/folder-open.svg</file>
     <file>icons/play.svg</file>
     <file>icons/save.svg</file>
-    <file>icons/delete.svg</file>
+    <file>icons/output.svg</file>
   </gresource>
 </gresources>

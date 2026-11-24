@@ -25,7 +25,7 @@ target_compile_features(relapse-state PUBLIC c_std_11)
 target_include_directories(relapse-state PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(relapse-state PUBLIC PkgConfig::GIO PRIVATE PkgConfig::JSON_GLIB)
 
-add_library(relapse-profiles STATIC src/profiles/store.c src/profiles/account.c)
+add_library(relapse-profiles STATIC src/profiles/store.c src/profiles/account.c src/profiles/config.c)
 target_compile_features(relapse-profiles PUBLIC c_std_11)
 target_include_directories(relapse-profiles PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(relapse-profiles PUBLIC PkgConfig::GIO PRIVATE PkgConfig::JSON_GLIB PkgConfig::CURL)
@@ -35,7 +35,7 @@ target_compile_features(relapse-socket PUBLIC c_std_11)
 target_include_directories(relapse-socket PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(relapse-socket PUBLIC PkgConfig::GIO PRIVATE PkgConfig::JSON_GLIB)
 
-add_library(relapse-bridge STATIC src/socket/bridge.c src/socket/console.c)
+add_library(relapse-bridge STATIC src/socket/bridge.c src/socket/console.c src/socket/dialogs.c)
 target_compile_features(relapse-bridge PUBLIC c_std_11)
 target_link_libraries(relapse-bridge PUBLIC relapse-socket PRIVATE PkgConfig::JSON_GLIB)
 
@@ -43,15 +43,13 @@ add_library(relapse-sessions STATIC src/socket/sessions.c)
 target_compile_features(relapse-sessions PUBLIC c_std_11)
 target_link_libraries(relapse-sessions PUBLIC relapse-bridge)
 
-pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
-
 add_library(relapse-ui STATIC
-    src/ui/window.c src/ui/style.c src/ui/editor.c src/ui/scripts.c src/ui/tabs.c src/ui/settings.c
+    src/ui/window.c src/ui/style.c src/ui/editor.c src/ui/editor_wrap.c src/ui/scripts.c src/ui/tabs.c src/ui/settings.c
     src/ui/tab_strip.c src/ui/toolbar.c src/ui/output.c src/ui/search.c src/ui/shader_strip.c src/ui/profiles.c src/ui/console.c
-    src/ui/picker.c src/ui/accounts.c)
+    src/ui/picker.c src/ui/accounts.c src/ui/dialogs.c src/ui/configuration.c)
 target_compile_features(relapse-ui PUBLIC c_std_11)
 target_include_directories(relapse-ui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(relapse-ui PUBLIC PkgConfig::GTK4 relapse-settings relapse-profiles PRIVATE relapse-state PkgConfig::GTKSOURCE PkgConfig::EPOXY)
+target_link_libraries(relapse-ui PUBLIC PkgConfig::GTK4 relapse-settings relapse-profiles PRIVATE relapse-state PkgConfig::GTKSOURCE)
 
 find_program(GLIB_COMPILE_RESOURCES glib-compile-resources REQUIRED)
 set(APP_RESOURCES "${CMAKE_CURRENT_BINARY_DIR}/relapsegtk-resources.c")
@@ -64,12 +62,11 @@ add_custom_command(
         --generate-source --c-name=relapsegtk
     DEPENDS resources/relapsegtk.gresource.xml resources/style.css resources/styles/relapse.xml
         resources/icons/relapse.svg
-        resources/icons/chevron-left.svg resources/icons/chevron-right.svg
-        resources/icons/caret-down.svg resources/icons/rename.svg resources/icons/profiles.svg
-        resources/icons/editor.svg resources/icons/autoexec.svg resources/icons/settings.svg
+        resources/icons/caret-down.svg resources/icons/profiles.svg
+        resources/icons/editor.svg resources/icons/settings.svg
         resources/icons/folder-open.svg resources/icons/play.svg
-        resources/icons/save.svg resources/icons/delete.svg
-        resources/scripts/session.luau resources/scripts/console.luau
+        resources/icons/save.svg resources/icons/output.svg
+        resources/scripts/session.luau resources/scripts/console.luau resources/scripts/dialogs.luau
     VERBATIM)
 
 add_library(relapse-resources OBJECT "${APP_RESOURCES}")

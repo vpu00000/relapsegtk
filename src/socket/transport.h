@@ -42,7 +42,6 @@ RelapseSocket *relapse_socket_new(const RelapseSocketHandlers *handlers, gpointe
 gboolean relapse_socket_connect(RelapseSocket *socket, const char *path,
                                 const char *channel, GError **error);
 RelapseSocketState relapse_socket_get_state(const RelapseSocket *socket);
-gsize relapse_socket_get_max_message_bytes(const RelapseSocket *socket);
 GPid relapse_socket_get_peer_pid(const RelapseSocket *socket);
 
 RelapseSocketSendResult relapse_socket_send(RelapseSocket *socket, GBytes *message);

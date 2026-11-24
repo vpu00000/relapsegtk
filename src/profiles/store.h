@@ -3,6 +3,7 @@
 #include <gio/gio.h>
 
 gboolean profile_name_valid(const char *name);
+char *profile_data_directory(const char *name, GError **error);
 gboolean profile_create(const char *name, GError **error);
 gboolean profile_rename(const char *name, const char *replacement, GError **error);
 void profile_delete_async(const char *name, GCancellable *cancellable,

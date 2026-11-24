@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <style-scheme id="relapse" name="Relapse" version="1.0">
   <description>The app-owned editor palette.</description>
-  <color name="background" value="#131417"/>
-  <color name="foreground" value="#e7e8ec"/>
-  <color name="muted" value="#959aa4"/>
-  <color name="line" value="#1c1d20"/>
-  <color name="selection" value="#484d5b"/>
+  <color name="background" value="#161616"/>
+  <color name="foreground" value="#eeeeee"/>
+  <color name="muted" value="#999999"/>
+  <color name="line" value="#222222"/>
+  <color name="selection" value="#383838"/>
   <color name="keyword" value="#c5a9eb"/>
   <color name="string" value="#adcc92"/>
   <color name="number" value="#d8ba86"/>

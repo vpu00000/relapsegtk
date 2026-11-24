@@ -1,8 +1,10 @@
 #include "settings.h"
+#include "configuration.h"
 #include "picker.h"
 
 #include <glib/gstdio.h>
 #include <unistd.h>
+#include <string.h>
 
 typedef struct {
     GtkSpinButton *font_size;
@@ -17,6 +19,7 @@ typedef struct {
     GtkWidget *launcher_button;
     GtkLabel *launcher_path;
     LauncherChangedFunc launcher_changed;
+    GtkWindow *configuration;
     GtkWidget *scripts_button;
     GtkLabel *scripts_path_label;
     ScriptsChangedFunc scripts_changed;
@@ -28,12 +31,27 @@ typedef struct {
 
 static const int indent_widths[] = {2, 4, 8};
 
+static void set_path_label(GtkLabel *label, const char *path)
+{
+    if (!path || !*path) {
+        gtk_label_set_text(label, "Choose…");
+        gtk_widget_set_tooltip_text(GTK_WIDGET(label), NULL);
+        return;
+    }
+    const char *home = g_get_home_dir();
+    const char *relative = g_str_has_prefix(path, home) ? path + strlen(home) : NULL;
+    g_autofree char *shortened = relative && (*relative == '/' || !*relative)
+        ? g_strconcat("~", relative, NULL) : NULL;
+    g_autofree char *display = g_filename_display_name(shortened ? shortened : path);
+    g_autofree char *full = g_filename_display_name(path);
+    gtk_label_set_text(label, display);
+    gtk_widget_set_tooltip_text(GTK_WIDGET(label), full);
+}
+
 void settings_set_launcher(GtkWidget *page, const char *path)
 {
     Settings *state = g_object_get_data(G_OBJECT(page), "settings");
-    g_autofree char *name = path && *path ? g_filename_display_basename(path) : g_strdup("None selected");
-    gtk_label_set_text(state->launcher_path, name);
-    gtk_widget_set_tooltip_text(GTK_WIDGET(state->launcher_path), path);
+    set_path_label(state->launcher_path, path);
 }
 
 void settings_set_scripts_path(GtkWidget *page, const char *path)
@@ -41,9 +59,7 @@ void settings_set_scripts_path(GtkWidget *page, const char *path)
     Settings *state = g_object_get_data(G_OBJECT(page), "settings");
     g_free(state->scripts_path);
     state->scripts_path = g_strdup(path);
-    g_autofree char *name = path && *path ? g_filename_display_basename(path) : g_strdup("None selected");
-    gtk_label_set_text(state->scripts_path_label, name);
-    gtk_widget_set_tooltip_text(GTK_WIDGET(state->scripts_path_label), path);
+    set_path_label(state->scripts_path_label, path);
 }
 
 static void picker_error(GtkWidget *page, const char *title, const GError *error)
@@ -138,11 +154,35 @@ static void select_scripts(GtkButton *button, gpointer user_data)
         initial, state->picker, scripts_chosen, owner);
 }
 
+static void configuration_closed(GtkWindow *window, gpointer user_data)
+{
+    (void)window;
+    Settings *state = user_data;
+    state->configuration = NULL;
+}
+
+static void open_configuration(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    GtkWidget *page = user_data;
+    Settings *state = g_object_get_data(G_OBJECT(page), "settings");
+    if (state->stopped) return;
+    if (state->configuration) {
+        gtk_window_present(state->configuration);
+        return;
+    }
+    state->configuration = configuration_dialog_new(
+        GTK_WINDOW(gtk_widget_get_root(page)), NULL, NULL);
+    if (state->configuration)
+        g_signal_connect(state->configuration, "destroy", G_CALLBACK(configuration_closed), state);
+}
+
 void settings_shutdown(GtkWidget *page)
 {
     Settings *state = g_object_get_data(G_OBJECT(page), "settings");
     state->stopped = TRUE;
     if (state->picker) g_cancellable_cancel(state->picker);
+    if (state->configuration) gtk_window_destroy(state->configuration);
 }
 
 static void free_settings(gpointer user_data)
@@ -230,41 +270,44 @@ static GtkWidget *label_new(const char *text, const char *style)
     return label;
 }
 
-static void add_row(GtkWidget *group, const char *title, const char *description, GtkWidget *control)
+static void section_start(GtkGrid *grid, int *row, const char *title)
 {
-    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 20);
-    gtk_widget_add_css_class(row, "settings-row");
-    GtkWidget *labels = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
-    gtk_widget_set_hexpand(labels, TRUE);
-    gtk_widget_set_valign(labels, GTK_ALIGN_CENTER);
-    gtk_box_append(GTK_BOX(labels), label_new(title, "settings-label"));
-    GtkWidget *detail = label_new(description, "settings-description");
-    gtk_label_set_wrap(GTK_LABEL(detail), TRUE);
-    gtk_label_set_max_width_chars(GTK_LABEL(detail), 33);
-    gtk_box_append(GTK_BOX(labels), detail);
-    gtk_box_append(GTK_BOX(row), labels);
-    GtkWidget *slot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_size_request(slot, 132, -1);
-    gtk_widget_set_valign(slot, GTK_ALIGN_CENTER);
-    gtk_widget_set_hexpand(control, TRUE);
-    gtk_widget_set_halign(control, GTK_ALIGN_END);
-    gtk_box_append(GTK_BOX(slot), control);
-    gtk_box_append(GTK_BOX(row), slot);
-    gtk_box_append(GTK_BOX(group), row);
+    if (*row > 0) {
+        GtkWidget *line = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+        gtk_grid_attach(grid, line, 0, (*row)++, 3, 1);
+    }
+    GtkWidget *heading = label_new(title, "preferences-section");
+    gtk_grid_attach(grid, heading, 0, *row, 1, 1);
 }
 
-static GtkWidget *section_new(GtkWidget *column, const char *title, GtkWidget **out_group)
+static void add_option(GtkGrid *grid, int *row, const char *name, GtkWidget *control)
 {
-    GtkWidget *section = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    gtk_widget_set_hexpand(section, TRUE);
-    gtk_box_append(GTK_BOX(column), section);
-    gtk_box_append(GTK_BOX(section), label_new(title, "settings-group-title"));
-    GtkWidget *group = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_add_css_class(group, "settings-group");
-    gtk_widget_set_hexpand(group, TRUE);
-    gtk_box_append(GTK_BOX(section), group);
-    *out_group = group;
-    return section;
+    GtkWidget *label = label_new(name, NULL);
+    gtk_label_set_wrap(GTK_LABEL(label), TRUE);
+    gtk_grid_attach(grid, label, 1, *row, 1, 1);
+    gtk_widget_set_halign(control, GTK_ALIGN_START);
+    gtk_widget_set_valign(control, GTK_ALIGN_CENTER);
+    gtk_grid_attach(grid, control, 2, (*row)++, 1, 1);
+}
+
+static GtkWidget *path_button(GtkLabel **value, const char *action)
+{
+    GtkWidget *button = gtk_button_new();
+    gtk_widget_add_css_class(button, "preference-path");
+    GtkWidget *line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    *value = GTK_LABEL(label_new("Choose…", NULL));
+    gtk_label_set_ellipsize(*value, PANGO_ELLIPSIZE_MIDDLE);
+    gtk_label_set_max_width_chars(*value, 52);
+    gtk_box_append(GTK_BOX(line), GTK_WIDGET(*value));
+    GtkWidget *icon = gtk_image_new_from_resource("/org/relapse/RelapseGtk/icons/folder-open.svg");
+    gtk_image_set_pixel_size(GTK_IMAGE(icon), 14);
+    gtk_box_append(GTK_BOX(line), icon);
+    gtk_button_set_child(GTK_BUTTON(button), line);
+    gtk_accessible_update_property(GTK_ACCESSIBLE(button), GTK_ACCESSIBLE_PROPERTY_LABEL, action, -1);
+    gtk_accessible_update_relation(GTK_ACCESSIBLE(button), GTK_ACCESSIBLE_RELATION_DESCRIBED_BY,
+                                   *value, NULL, -1);
+    gtk_widget_set_tooltip_text(button, action);
+    return button;
 }
 
 GtkWidget *settings_new(const EditorSettings *settings, SettingsChangedFunc changed,
@@ -287,23 +330,14 @@ GtkWidget *settings_new(const EditorSettings *settings, SettingsChangedFunc chan
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(page), content);
     gtk_box_append(GTK_BOX(content), label_new("Settings", "settings-title"));
 
-    GtkWidget *columns = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 24);
-    gtk_widget_add_css_class(columns, "settings-columns");
-    gtk_widget_set_hexpand(columns, TRUE);
-    gtk_box_append(GTK_BOX(content), columns);
-
-    GtkWidget *left = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
-    gtk_widget_set_hexpand(left, TRUE);
-    gtk_widget_set_valign(left, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(columns), left);
-
-    GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
-    gtk_widget_set_hexpand(right, TRUE);
-    gtk_widget_set_valign(right, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(columns), right);
-
-    GtkWidget *editor_group = NULL;
-    section_new(left, "Editor", &editor_group);
+    GtkGrid *grid = GTK_GRID(gtk_grid_new());
+    gtk_grid_set_column_spacing(grid, 26);
+    gtk_grid_set_row_spacing(grid, 6);
+    gtk_widget_add_css_class(GTK_WIDGET(grid), "settings-group");
+    gtk_widget_add_css_class(GTK_WIDGET(grid), "preferences-grid");
+    gtk_box_append(GTK_BOX(content), GTK_WIDGET(grid));
+    int row = 0;
+    section_start(grid, &row, "Editor");
 
     GtkWidget *font = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     state->font_size = GTK_SPIN_BUTTON(gtk_spin_button_new_with_range(
@@ -317,13 +351,12 @@ GtkWidget *settings_new(const EditorSettings *settings, SettingsChangedFunc chan
         GTK_ACCESSIBLE_PROPERTY_LABEL, "Editor font size in pixels", -1);
     gtk_box_append(GTK_BOX(font), GTK_WIDGET(state->font_size));
     gtk_box_append(GTK_BOX(font), label_new("px", "settings-description"));
-    add_row(editor_group, "Font size", "Editor text and line numbers", font);
+    add_option(grid, &row, "Font size", font);
 
     state->word_wrap = GTK_SWITCH(gtk_switch_new());
     gtk_widget_add_css_class(GTK_WIDGET(state->word_wrap), "word-wrap");
     gtk_accessible_update_property(GTK_ACCESSIBLE(state->word_wrap),
         GTK_ACCESSIBLE_PROPERTY_LABEL, "Word wrap", -1);
-    add_row(editor_group, "Word wrap", "Wrap long lines to fit the editor", GTK_WIDGET(state->word_wrap));
 
     GtkWidget *indent = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(indent, "indent-options");
@@ -338,59 +371,51 @@ GtkWidget *settings_new(const EditorSettings *settings, SettingsChangedFunc chan
         gtk_box_append(GTK_BOX(indent), GTK_WIDGET(state->indent[i]));
         g_signal_connect(state->indent[i], "toggled", G_CALLBACK(values_changed), state);
     }
-    add_row(editor_group, "Indentation", "Spaces used by Tab and auto-indent", indent);
+    GtkWidget *indent_control = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_append(GTK_BOX(indent_control), indent);
+    gtk_box_append(GTK_BOX(indent_control), label_new("spaces", "settings-description"));
+    add_option(grid, &row, "Indent width", indent_control);
+    add_option(grid, &row, "Wrap long lines", GTK_WIDGET(state->word_wrap));
     settings_set_editor(page, settings);
     g_signal_connect(state->font_size, "value-changed", G_CALLBACK(values_changed), state);
     g_signal_connect(state->word_wrap, "notify::active", G_CALLBACK(wrap_changed), state);
 
-    GtkWidget *session_group = NULL;
-    section_new(left, "Session", &session_group);
+    section_start(grid, &row, "Workspace");
+    state->scripts_button = path_button(&state->scripts_path_label, "Choose script folder");
+    add_option(grid, &row, "Script folder", state->scripts_button);
+    g_signal_connect(state->scripts_button, "clicked", G_CALLBACK(select_scripts), page);
+
     state->restore_tabs = GTK_SWITCH(gtk_switch_new());
     gtk_widget_add_css_class(GTK_WIDGET(state->restore_tabs), "restore-tabs");
     gtk_accessible_update_property(GTK_ACCESSIBLE(state->restore_tabs),
         GTK_ACCESSIBLE_PROPERTY_LABEL, "Restore tabs on startup", -1);
     gtk_switch_set_active(state->restore_tabs, TRUE);
-    add_row(session_group, "Restore tabs on startup", "Reopen tabs and unsaved drafts", GTK_WIDGET(state->restore_tabs));
+    gtk_widget_set_tooltip_text(GTK_WIDGET(state->restore_tabs), "Reopen tabs and unsaved drafts on startup");
+    add_option(grid, &row, "Restore tabs on startup", GTK_WIDGET(state->restore_tabs));
     g_signal_connect(state->restore_tabs, "notify::active", G_CALLBACK(restore_changed), state);
 
-    GtkWidget *output_group = NULL;
-    section_new(right, "Output", &output_group);
+    GtkWidget *clear = gtk_button_new_with_label("Clear");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(clear), GTK_ACCESSIBLE_PROPERTY_LABEL, "Clear untitled tabs", -1);
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(clear), "win.clear-untitled");
+    add_option(grid, &row, "Untitled tabs", clear);
+
     state->output = GTK_SWITCH(gtk_switch_new());
     gtk_widget_add_css_class(GTK_WIDGET(state->output), "redirect-output");
     gtk_accessible_update_property(GTK_ACCESSIBLE(state->output),
         GTK_ACCESSIBLE_PROPERTY_LABEL, "Redirect script output", -1);
-    add_row(output_group, "Redirect script output", "Show your scripts’ output below the editor", GTK_WIDGET(state->output));
+    add_option(grid, &row, "Show script output", GTK_WIDGET(state->output));
     g_signal_connect(state->output, "notify::active", G_CALLBACK(output_changed), state);
 
-    GtkWidget *scripts_group = NULL;
-    section_new(right, "Scripts", &scripts_group);
-    GtkWidget *scripts = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-    state->scripts_button = gtk_button_new_with_label("Select…");
-    gtk_accessible_update_property(GTK_ACCESSIBLE(state->scripts_button),
-        GTK_ACCESSIBLE_PROPERTY_LABEL, "Select script folder", -1);
-    gtk_box_append(GTK_BOX(scripts), state->scripts_button);
-    state->scripts_path_label = GTK_LABEL(gtk_label_new("None selected"));
-    gtk_label_set_ellipsize(state->scripts_path_label, PANGO_ELLIPSIZE_MIDDLE);
-    gtk_label_set_max_width_chars(state->scripts_path_label, 16);
-    gtk_widget_add_css_class(GTK_WIDGET(state->scripts_path_label), "settings-description");
-    gtk_box_append(GTK_BOX(scripts), GTK_WIDGET(state->scripts_path_label));
-    add_row(scripts_group, "Script folder", "Folder shown in the Scripts library", scripts);
-    g_signal_connect(state->scripts_button, "clicked", G_CALLBACK(select_scripts), page);
-
-    GtkWidget *launcher_group = NULL;
-    section_new(right, "Profiles", &launcher_group);
-    GtkWidget *launcher = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-    state->launcher_button = gtk_button_new_with_label("Select…");
-    gtk_accessible_update_property(GTK_ACCESSIBLE(state->launcher_button),
-        GTK_ACCESSIBLE_PROPERTY_LABEL, "Select launcher", -1);
-    gtk_box_append(GTK_BOX(launcher), state->launcher_button);
-    state->launcher_path = GTK_LABEL(gtk_label_new("None selected"));
-    gtk_label_set_ellipsize(state->launcher_path, PANGO_ELLIPSIZE_MIDDLE);
-    gtk_label_set_max_width_chars(state->launcher_path, 16);
-    gtk_widget_add_css_class(GTK_WIDGET(state->launcher_path), "settings-description");
-    gtk_box_append(GTK_BOX(launcher), GTK_WIDGET(state->launcher_path));
-    add_row(launcher_group, "Launcher", "Executable used to launch Profiles", launcher);
+    section_start(grid, &row, "Profiles");
+    state->launcher_button = path_button(&state->launcher_path, "Choose launcher executable");
+    add_option(grid, &row, "Launcher", state->launcher_button);
     g_signal_connect(state->launcher_button, "clicked", G_CALLBACK(select_launcher), page);
+
+    GtkWidget *configuration = gtk_button_new_with_label("Configure…");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(configuration),
+        GTK_ACCESSIBLE_PROPERTY_LABEL, "Configure global profile defaults", -1);
+    add_option(grid, &row, "Profile defaults", configuration);
+    g_signal_connect(configuration, "clicked", G_CALLBACK(open_configuration), page);
 
     return page;
 }

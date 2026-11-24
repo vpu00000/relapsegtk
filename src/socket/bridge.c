@@ -14,13 +14,11 @@ struct UiBridge {
     gpointer user_data;
     GHashTable *requests;
     gint64 request_id, session, deadline;
-    OutputState state;
     gboolean enabled, ready;
 };
 
 static void set_state(UiBridge *bridge, OutputState state, const char *detail)
 {
-    bridge->state = state;
     if (bridge->handlers.state_changed)
         bridge->handlers.state_changed(state, detail, bridge->user_data);
 }

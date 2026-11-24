@@ -2,6 +2,7 @@
 
 #include <gtk/gtk.h>
 #include "settings/editor.h"
+#include "profiles/target.h"
 
 typedef struct {
     void (*execute)(gpointer user_data);
@@ -16,6 +17,7 @@ typedef struct {
     gboolean (*launch_profile)(const char *name, const char *place_id, const char *job_id,
                                GError **error, gpointer user_data);
     gboolean (*profile_running)(const char *name, gpointer user_data);
+    const ProfileJoinTarget *(*profile_session)(const char *name, gpointer user_data);
 } WindowHandlers;
 
 GtkWindow *window_new(GtkApplication *application, const char *scripts_path,
